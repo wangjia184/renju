@@ -1,0 +1,44 @@
+[package]
+name = "match_generator"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "3.1.18", features = ["derive"] }
+tokio = { version = "1.18.2", features = ["process", "sync", "macros", "io-util", "rt-multi-thread", "fs", "time"] } #https://docs.rs/tokio/1.18.2/tokio/index.html#feature-flags
+tokio-util = { version = "0.7.2", features = ["io" ] }
+nalgebra = "0.31.0"
+num-traits = "0.2.15"
+regex = "1.6.0"
+
+# `bundled` causes us to automatically compile and link in an up to date
+# version of SQLite for you. This avoids many common build issues, and
+# avoids depending on the version of SQLite on the users system (or your
+# system), which may be old or missing. It's the right choice for most
+# programs that control their own SQLite databases.
+#
+# That said, it's not ideal for all scenarios and in particular, generic
+# libraries built around `rusqlite` should probably not enable it, which
+# is why it is not a default feature -- it could become hard to disable.
+rusqlite = { version = "0.28.0", features = ["bundled", "backup"] }
+
+
+
+[dependencies.uuid]
+version = "1.1.2"
+features = [
+    "v4",                # Lets you generate random UUIDs
+    "fast-rng",          # Use a faster (but still sufficiently random) RNG
+    "macro-diagnostics", # Enable better diagnostics for compile-time UUIDs
+]
+
+
+[dev-dependencies]
+rand = "0.8.5"
+
+
+[profile.release]
+strip = true  # Automatically strip symbols from the binary.
+opt-level = "z"  # Optimize for size.
+lto = true
+codegen-units = 1
