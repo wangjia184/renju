@@ -147,7 +147,7 @@ impl Database {
 
 
     pub fn query_by_previd(self : &Self, previd : i32) -> Vec<Turn> {
-      let mut stmt = self.connection.prepare("SELECT rowid, previd, key, answer, evaluation, pieces, over FROM main.turn WHERE previd = ?1").expect("Failed to query");
+      let mut stmt = self.connection.prepare("SELECT rowid, previd, key, answer, evaluation, pieces, over FROM main.turn WHERE previd = ?1 ORDER BY evaluation DESC").expect("Failed to query");
       
       stmt.query_map([previd], |row| {
           Ok(Turn {

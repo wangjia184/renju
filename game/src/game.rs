@@ -1,11 +1,16 @@
 
+
+
 use std::{cmp::Ordering, collections::HashMap};
 
 use nalgebra::{ SMatrix};
-use num_traits::identities::Zero;
+use num_traits::identities::{ Zero };
 
 // Statically sized and statically allocated 2x3 matrix using 32-bit floats.
 const SIZE: usize = 15;
+const BLANK: u8 = 0;
+const BLACK: u8 = 1;
+const WHITE: u8 = 2;
 pub type BoardMatrix = SMatrix<u8, SIZE, SIZE>;
 
 pub trait Board {
@@ -17,11 +22,142 @@ pub trait Board {
   fn generate_opening_patterns() -> HashMap<String, Self> where Self : Sized;
   fn for_each_piece<F : FnMut(usize, usize, u8)>(self : &Self, cb : F);
   fn is_over(self : &Self) -> bool;
+  fn check_black_in_position( self : &Self, position:(usize, usize)) -> RowState;
+  fn is_forbidden(self : &Self, position:(usize, usize)) -> bool;
+  fn get_all_appearances(self : &Self, answer : (usize, usize)) -> Vec<(BoardMatrix, (usize, usize))>;
+  fn split(self : &Self) -> (BoardMatrix/*black*/, BoardMatrix/*white */);
+}
+
+
+#[derive(Debug)]
+pub struct RowState {
+  three_count : u8, // live three
+  four_count : u8,  // open four
+  has_five : bool,
+  over_five : bool,
+}
+
+impl Default for RowState {
+  fn default() -> Self {
+      Self { three_count: 0, four_count: 0, has_five: false, over_five: false }
+  }
+}
+
+#[allow(dead_code)]
+impl RowState {
+  pub fn get_live_three_count(self : &Self) -> u8 { self.three_count }
+  pub fn get_open_four_count(self : &Self) -> u8 { self.four_count }
+  pub fn has_five(self : &Self) -> bool { self.has_five }
+  pub fn over_five(self : &Self) -> bool { self.over_five }
 }
 
 
 
 impl Board for BoardMatrix {
+
+  fn check_black_in_position( self : &Self, position:(usize, usize)) -> RowState {
+    let mut state = RowState::default();
+
+    // horizontal
+    scan_row( self,
+      position,
+      |(row, col)| {
+        if col > 0 {
+          Some((row, col-1))
+        } else {
+          None
+        }
+      }, 
+      |(row, col)| {
+        if col < SIZE - 1 {
+          Some((row, col+1))
+        } else {
+          None
+        }
+      },
+      &mut state
+    );
+
+
+    // vertical
+    scan_row( self,
+      position,
+      |(row, col)| {
+        if row > 0 {
+          Some((row-1, col))
+        } else {
+          None
+        }
+      }, 
+      |(row, col)| {
+        if row < SIZE - 1 {
+          Some((row+1, col))
+        } else {
+          None
+        }
+      },
+      &mut state
+    );
+
+
+    // main diagonal
+    scan_row( self,
+      position,
+      |(row, col)| {
+        if row > 0 && col > 0 {
+          Some((row-1, col-1))
+        } else {
+          None
+        }
+      }, 
+      |(row, col)| {
+        if row < SIZE - 1 && col < SIZE - 1 {
+          Some((row+1, col+1))
+        } else {
+          None
+        }
+      },
+      &mut state
+    );
+
+    // anti diagonal
+    scan_row( self,
+      position,
+      |(row, col)| {
+        if row > 0 && col < SIZE - 1 {
+          Some((row-1, col+1))
+        } else {
+          None
+        }
+      }, 
+      |(row, col)| {
+        if row < SIZE - 1 && col > 0 {
+          Some((row+1, col-1))
+        } else {
+          None
+        }
+      },
+      &mut state
+    );
+
+    state
+  }
+
+
+  // check if the black at (usize, usize) is forbidden
+  // Double three – Black cannot place a stone that builds two separate lines with three black stones in unbroken rows (i.e. rows not blocked by white stones).
+  // Double four – Black cannot place a stone that builds two separate lines with four black stones in a row.
+  // Overline – six or more black stones in a row.
+  fn is_forbidden(self : &Self, position:(usize, usize)) -> bool
+  {
+    let state = self.check_black_in_position(position);
+    !state.has_five &&
+    (
+      state.over_five ||
+      state.three_count > 1 ||
+      state.four_count > 1
+    )
+  }
 
   fn is_over(self : &Self) -> bool {
 
@@ -30,8 +166,8 @@ impl Board for BoardMatrix {
     for row in 0..SIZE {
       for col in 0..SIZE {
         let index = match self[(row, col)] {
-          1 => 0,
-          2 => 1,
+          BLACK => 0,
+          WHITE => 1,
           _ => continue,
         };
         
@@ -89,16 +225,16 @@ impl Board for BoardMatrix {
           if value == expected_value { // expected
             cb( row, col, value);
             expected_value = match expected_value {
-                1 => 2,
-                2 => 1,
+                BLACK => WHITE,
+                WHITE => BLACK,
                 _ => panic!("incorrect value"),
             };
             // accumulated
             if let Some(more) = vector.pop() {
               cb( more.0, more.1, expected_value);
               expected_value = match expected_value {
-                  1 => 2,
-                  2 => 1,
+                  BLACK => WHITE,
+                  WHITE => BLACK,
                   _ => panic!("incorrect value"),
               };
             }
@@ -340,7 +476,76 @@ impl Board for BoardMatrix {
     min_id
     
   }
+
+
+  fn get_all_appearances(self : &BoardMatrix, answer : (usize, usize)) -> Vec<(BoardMatrix, (usize, usize))> {
+    let mut hash_map = HashMap::new();
+
+    let mut m1 = self.clone();
+    flip_main_diagonal(&mut m1);
+    let id1 = m1.to_base81_string();
+    let answer1 = main_diagonal_transform(answer);
+ 
+    let mut m2 = m1.clone();
+    flip_vertical(&mut m2);
+    let id2 = m2.to_base81_string();
+    let answer2 = vertical_transform(answer1);
+
+    let mut m3 = self.clone();
+    flip_anti_diagonal(&mut m3);
+    let id3 = m3.to_base81_string();
+    let answer3 = anti_diagonal_transform(answer);
+
+    let mut m4 = m3.clone();
+    flip_vertical(&mut m4);
+    let id4 = m4.to_base81_string();
+    let answer4 = vertical_transform(answer3);
+
+    let mut m5 = self.clone();
+    flip_horizontal(&mut m5);
+    let id5 = m5.to_base81_string();
+    let answer5 = horizontal_transform(answer);
+
+    let mut m6 = self.clone();
+    flip_vertical(&mut m6);
+    let id6 = m6.to_base81_string();
+    let answer6 = vertical_transform(answer);
+
+    let mut m7 = m6.clone();
+    flip_horizontal(&mut m7);
+    let id7 = m7.to_base81_string();
+    let answer7 = horizontal_transform(answer6);
+
+    hash_map.insert(id1, (m1, answer1));
+    hash_map.insert(id2, (m2, answer2));
+    hash_map.insert(id3, (m3, answer3));
+    hash_map.insert(id4, (m4, answer4));
+    hash_map.insert(id5, (m5, answer5));
+    hash_map.insert(id6, (m6, answer6));
+    hash_map.insert(id7, (m7, answer7));
+    hash_map.insert(self.to_base81_string(), (self.clone(), answer));
+
+    hash_map.into_values().collect()
+    
+  }
   
+
+  fn split(self : &Self) -> (BoardMatrix/*black*/, BoardMatrix/*white */) {
+    let mut black = BoardMatrix::zeros();
+    let mut white = BoardMatrix::zeros();
+
+    for row in 0..SIZE {
+      for col in 0..SIZE {
+        match self[(row, col)] {
+          BLACK => black[(row, col)] = 1,
+          WHITE => white[(row, col)] = 1,
+          _ => (),
+        };
+      }
+    }
+
+    (black, white)
+  }
 }
 
 
@@ -569,91 +774,339 @@ pub fn rotate_left(m : &mut BoardMatrix) {
 
 
 
-
-
-
-#[test]
-fn test_pattern()
+/// Scan blacks and blanks in a direction of position
+/// Return an array of vectors, each of them contains the postions of blacks or blanks
+///          0          1          2          3          4
+///  X --> BLACKS --> BLANKS --> BLACKS --> BLANKS --> BLACKS
+fn scan_direction<F>( m: &BoardMatrix, pos:(usize, usize), get_neighbor:F ) -> [Vec<(usize, usize)>; 5]
+  where F : Fn( (usize, usize) ) -> Option<(usize, usize)>
 {
-  BoardMatrix::generate_opening_patterns().values().enumerate().for_each( |(idx, x)| {
-    println!("{}", idx + 1);
-    x.print();
-  });
-  
+  let mut vectors: [Vec<(usize, usize)>; 5] = Default::default();
+
+  let mut current = pos;
+    let mut expected_state = BLACK;
+    let mut index = 0;
+    while index < vectors.len() {
+      match get_neighbor(current) {
+        None => break, // out of board
+        Some(p) => {
+          let state = m[p];
+          if state == expected_state {
+            current = p;
+            vectors[index].push(current);
+          } else {
+            index += 1;
+            match state {
+              WHITE => break, // a white stone
+              BLACK => expected_state = BLACK,
+              BLANK => expected_state = BLANK,
+              _ => unreachable!("Board state must not exceed 2"),
+            }
+          }
+        }
+      }
+    }// end of while
+  vectors
 }
 
 
 
-#[test]
-fn test_for_each_piece()
-{
-  let mut m = BoardMatrix::zeros();
-  m[(0,0)] = 1;
-  m[(0,1)] = 1;
-  m[(0,2)] = 1;
-  m[(0,3)] = 2;
-  m[(0,4)] = 2;
-  m[(0,5)] = 1;
-  m[(0,6)] = 2;
-  m[(0,7)] = 2;
-  m[(0,8)] = 1;
-  
-  m.for_each_piece( | row, col, value | {
-    println!("{}:{} = {}", row, col, value);
-  })
-}
 
 
-#[test]
-fn test_is_over()
-{
-  let mut m = BoardMatrix::zeros();
-  m[(6,6)] = 1;
-  m[(7,7)] = 1;
-  m[(8,8)] = 1;
-  m[(9,9)] = 1;
-  m[(10,10)] = 2;
-  m[(11,11)] = 1;
-  m[(12,12)] = 1;
-  m[(13,13)] = 1;
-  m[(14,14)] = 1;
-  
-  assert_eq!( m.is_over(), false);
-  m[(9,9)] = 2;
-  m[(10,10)] = 1;
-  assert_eq!( m.is_over(), true);
+fn scan_row<F1, F2>( m: &BoardMatrix, pos:(usize, usize), get_neighbor_of_main_direction:F1, get_neighbor_of_opposite_direction:F2, state : &mut RowState)
+    where F1 : Fn( (usize, usize) ) -> Option<(usize, usize)>,
+          F2 : Fn( (usize, usize) ) -> Option<(usize, usize)>
+  {
 
-  let mut m = BoardMatrix::zeros();
-  m[(0,0)] = 2;
-  m[(0,1)] = 2;
-  m[(0,2)] = 2;
-  m[(0,4)] = 2;
-  assert_eq!( m.is_over(), false);
-  m[(0,3)] = 2;
-  assert_eq!( m.is_over(), true);
+    let main_diretion: [Vec<(usize, usize)>; 5] = scan_direction( m, pos, get_neighbor_of_main_direction);
+    let opposite_diretion: [Vec<(usize, usize)>; 5] = scan_direction( m, pos, get_neighbor_of_opposite_direction);
 
 
-  let mut m = BoardMatrix::zeros();
-  m[(0,14)] = 1;
-  m[(0,13)] = 1;
-  m[(0,12)] = 1;
-  m[(0,11)] = 1;
-  assert_eq!( m.is_over(), false);
-  m[(0,10)] = 1;
-  assert_eq!( m.is_over(), true);
+    let continuous_blacks = main_diretion[0].len() + opposite_diretion[0].len() + 1;
+
+    match continuous_blacks {
+        // ┼┼┼┼┼┼┼
+        // ┼●●●●●┼
+        // ┼┼┼┼┼┼┼
+        5 => state.has_five = true, // five in a row, no forbidden
+        
+
+        //////////////////// four continuous blacks
+        4 => { 
+          let mut four = false;
+          if main_diretion[1].len() > 0 {
+            // ┼●●●●┼
+            // ^
+            let mut cloned = m.clone();
+            cloned[pos] = BLACK; // suppose the specified position is black
+            if !cloned.is_forbidden(main_diretion[1][0]) {
+              four = true;
+            }
+          }
+
+          // ┼●●●●┼
+          //      ^
+          if opposite_diretion[1].len() > 0 {
+            let mut cloned = m.clone();
+            cloned[pos] = BLACK; // suppose the specified position is black
+            if !cloned.is_forbidden(opposite_diretion[1][0]) {
+              four = true;
+            }
+          }
+
+          if four {
+            state.four_count += 1;
+          }
+        },
+
+        //////////////////// three continuous blacks
+        3 => {
+
+          // ┼●┼●●●┼
+          //   ^
+          if main_diretion[1].len() == 1 && main_diretion[2].len() == 1 {
+            let mut cloned = m.clone();
+            cloned[pos] = BLACK; // suppose the specified position is black
+            if !cloned.is_forbidden(main_diretion[1][0]) {
+              state.four_count += 1;
+            }
+          }
+
+          // ┼●●●┼●┼
+          //     ^
+          if opposite_diretion[1].len() == 1 && opposite_diretion[2].len() == 1 {
+            let mut cloned = m.clone();
+            cloned[pos] = BLACK; // suppose the specified position is black
+            if !cloned.is_forbidden(opposite_diretion[1][0]) {
+              state.four_count += 1;
+            }
+          }
+
+          let mut live_three = false;
+          // ┼┼●●●┼
+          if ( 
+                main_diretion[1].len() > 2 
+                || 
+                (
+                  main_diretion[1].len() == 2 
+                  && 
+                  main_diretion[2].is_empty() 
+                ) 
+             ) 
+             &&
+             ( 
+                opposite_diretion[1].len() > 1 
+                || 
+                ( 
+                  opposite_diretion[1].len() == 1 
+                  && 
+                  opposite_diretion[2].is_empty() 
+                ) 
+             ) 
+          {
+            let mut cloned = m.clone();
+            cloned[pos] = BLACK; // suppose the specified position is black
+
+            // ┼┼●●●┼
+            // ^^   ^
+            if !cloned.is_forbidden(main_diretion[1][0]) &&
+               !cloned.is_forbidden(main_diretion[1][1]) &&
+               !cloned.is_forbidden(opposite_diretion[1][0])  {
+                live_three = true;
+            }
+          }
+
+          // ┼●●●┼┼
+          if ( 
+            opposite_diretion[1].len() > 2 
+            || 
+            (
+              opposite_diretion[1].len() == 2 
+              && 
+              opposite_diretion[2].is_empty() 
+            ) 
+          ) 
+          &&
+          ( 
+            main_diretion[1].len() > 1 
+            || 
+            ( 
+              main_diretion[1].len() == 1 
+              && 
+              main_diretion[2].is_empty() 
+            ) 
+          ) 
+          {
+            let mut cloned = m.clone();
+            cloned[pos] = BLACK; // suppose the specified position is black
+
+            // ┼┼●●●┼
+            //  ^   ^
+            if !cloned.is_forbidden(opposite_diretion[1][0]) &&
+               !cloned.is_forbidden(opposite_diretion[1][1]) &&
+               !cloned.is_forbidden(main_diretion[1][0])  {
+                live_three = true;
+              
+            }
+          }
+
+          if live_three {
+            state.three_count += 1;
+          }
+        },
+
+        //////////////////// two continuous blacks
+        2 => {
+
+          // ●●┼●●
+          if main_diretion[1].len() == 1 && main_diretion[2].len() == 2 {
+            let mut cloned = m.clone();
+            cloned[pos] = BLACK; // suppose the specified position is black
+            if !cloned.is_forbidden(main_diretion[1][0]) {
+              state.four_count += 1;
+            }
+          }
+
+          // ●●┼●●
+          if opposite_diretion[1].len() == 1 && opposite_diretion[2].len() == 2 {
+            let mut cloned = m.clone();
+            cloned[pos] = BLACK; // suppose the specified position is black
+            if !cloned.is_forbidden(opposite_diretion[1][0]) {
+              state.four_count += 1;
+            }
+          }
+
+          // ┼●┼●●┼
+          if main_diretion[1].len() == 1 &&
+             main_diretion[2].len() == 1 &&
+             (
+                main_diretion[3].len() > 1 // at least two blanks
+                ||
+                ( main_diretion[3].len() == 1 && main_diretion[4].is_empty() ) // or one blank without further blacks
+             )
+             &&
+             (
+                opposite_diretion[1].len() > 1 // at least two blanks
+                ||
+                ( opposite_diretion[1].len() == 1 && opposite_diretion[2].is_empty() ) // or one blank without further blacks
+             )
+          {
+            let mut cloned = m.clone();
+            cloned[pos] = BLACK; // suppose the specified position is black
+
+            // ┼●┼●●┼
+            //   ^
+            if !cloned.is_forbidden(main_diretion[1][0]) {
+              state.three_count += 1;
+            }
+          }
+
+          // ┼●●┼●┼
+          if opposite_diretion[1].len() == 1 &&
+             opposite_diretion[2].len() == 1 &&
+             (
+                opposite_diretion[3].len() > 1 // at least two blanks
+                ||
+                ( opposite_diretion[3].len() == 1 && opposite_diretion[4].is_empty() ) // or one blank without further blacks
+             )
+             &&
+             (
+                main_diretion[1].len() > 1 // at least two blanks
+                ||
+                ( main_diretion[1].len() == 1 && main_diretion[2].is_empty() ) // or one blank without further blacks
+             )
+          {
+            let mut cloned = m.clone();
+            cloned[pos] = BLACK; // suppose the specified position is black
+
+            // ┼●●┼●┼
+            //    ^
+            if !cloned.is_forbidden(opposite_diretion[1][0]) {
+              state.three_count += 1;
+            }
+          }
+        },
+
+        //////////////////// single black
+        1 => {
+
+          // ●●●┼●
+          if main_diretion[1].len() == 1 && main_diretion[2].len() == 3 {
+            let mut cloned = m.clone();
+            cloned[pos] = BLACK; // suppose the specified position is black
+
+            // ●●●┼●
+            //    ^
+            if !cloned.is_forbidden(main_diretion[1][0]) {
+              state.four_count += 1;
+            }
+          }
+
+          // ●┼●●●
+          if opposite_diretion[1].len() == 1 && opposite_diretion[2].len() == 3 {
+            let mut cloned = m.clone();
+            cloned[pos] = BLACK; // suppose the specified position is black
+
+            // ●●●┼●
+            //    ^
+            if !cloned.is_forbidden(opposite_diretion[1][0]) {
+              state.four_count += 1;
+            }
+          }
 
 
-  let mut m = BoardMatrix::zeros();
-  m[(0,14)] = 1;
-  m[(1,14)] = 1;
-  m[(2,14)] = 1;
-  m[(3,14)] = 1;
-  m[(4,14)] = 2;
-  assert_eq!( m.is_over(), false);
-  m[(4,14)] = 1;
-  assert_eq!( m.is_over(), true);
+          // ┼●●┼●┼
+          if main_diretion[1].len() == 1 &&
+             main_diretion[2].len() == 2 &&
+             (
+              main_diretion[3].len() > 1 ||
+              ( main_diretion[3].len() == 1 && main_diretion[4].is_empty() )
+             ) &&
+             (
+              opposite_diretion[1].len() > 1 ||
+              ( opposite_diretion[1].len() == 1 && opposite_diretion[2].is_empty() )
+             )
+          {
+            let mut cloned = m.clone();
+            cloned[pos] = BLACK; // suppose the specified position is black
 
-  let m = BoardMatrix::from_base81_string("0000000000000i0003r00R200p904QS08?017N01J2020001000000000");
-  m.print();
-  assert_eq!( m.is_over(), false);
-}
+            // ┼●●┼●┼
+            //    ^
+            if !cloned.is_forbidden(main_diretion[1][0]) {
+              state.three_count += 1;
+            }
+          }
+
+
+          // ┼●┼●●┼
+          if opposite_diretion[1].len() == 1 &&
+             opposite_diretion[2].len() == 2 &&
+             (
+              opposite_diretion[3].len() > 1 ||
+              ( opposite_diretion[3].len() == 1 && opposite_diretion[4].is_empty() )
+             ) &&
+             (
+              main_diretion[1].len() > 1 ||
+              ( main_diretion[1].len() == 1 && main_diretion[2].is_empty() )
+             )
+          {
+            let mut cloned = m.clone();
+            cloned[pos] = BLACK; // suppose the specified position is black
+
+            // ┼●●┼●┼
+            //    ^
+            if !cloned.is_forbidden(opposite_diretion[1][0]) {
+              state.three_count += 1;
+            }
+          }
+
+        },
+        0 => unreachable!("Number of black stone will never be zero!"),
+
+        //////////////////// move than five
+        _ => {
+          state.over_five = true;
+        },
+    }
+
+  }

@@ -13,43 +13,214 @@ use tokio::time::{self, Duration, Instant};
 use std::time::{ SystemTime};
 use std::process::Stdio;
 use std::collections::VecDeque;
+use std::io::prelude::*;
+use std::fs::{ File, OpenOptions };
 
 mod game;
 mod storage;
+mod mcts;
 use game::{BoardMatrix, Board};
 use storage::{ Turn, Database };
+
+
+
+
+static ABOUT_TEXT : &str = "Renju game ";
+
+static GENERATE_MATCH_HELP_TEXT : &str = "
+Using YiXin.exe to generate match 
+";
+
+static EXPORT_DATASET_HELP_TEXT : &str = "
+Export matches into training dataset
+";
+
+
+
+
+/// File Scanner
+#[derive(Parser, Debug)]
+#[clap(author, version, about = ABOUT_TEXT, long_about = Some(ABOUT_TEXT), trailing_var_arg=true)]
+struct Arguments {
+
+/*
+    /// The root folder on local filesystem to scan
+    #[clap(display_order=1, short, long, default_value_t = utils::get_current_dir())]
+    folder: String,
+
+    /// Regular expression to include files. Only files whose name matches the specified regexp will be listed. E.g. to only list *.dll and *.exe files, you can specify `((\\.dll)$)|((\\.exe)$)`
+    #[clap(display_order=2, short, long, default_value(".+"))]
+    include: String,
+
+    /// Regular expression to exclude files and directories. Files or directories whose name matches this regexp will be skipped
+    #[clap(display_order=3, short, long, default_value("(^~)|(^\\.)|((\\.tmp)$)|((\\.log)$)"))]
+    exclude: String,
+
+    /// Max number of recursive folders to scan
+    #[clap(display_order=4, short, long, default_value_t = 5)]
+    depth: u8,
+
+    /// Optional parameter. When a file path and name is supplied, file list is stored into the specified path in CSV format
+    #[clap(display_order=5, short, long)]
+    output : Option<String>,
+
+    /// For security consideration, application should not run as root-user. This optional paramerer allows to set a non-privileged user. This parameter only works for Linux/Unix/Mac
+    #[clap(display_order=6, short, long)]
+    user: Option<String>,
+     */
+
+    #[clap(subcommand)]
+    verb: Option<Verb>,
+}
+
+
+#[derive(Subcommand, Debug)]
+enum Verb {
+    /// Generating matches
+    #[clap(after_help=GENERATE_MATCH_HELP_TEXT)]
+    Generate 
+    { 
+        /// Path to YiXin.exe
+        #[clap(required = true)]
+        filepath: String
+    },
+
+    /// Exporting matches to dataset for training
+    #[clap(after_help=EXPORT_DATASET_HELP_TEXT)]
+    Export
+    { 
+        /// Path to YiXin.exe
+        #[clap(required = true)]
+        filepath: String
+    },
+}
+
 
 
 
 #[tokio::main(flavor = "current_thread")] // use single-threaded runtime
 async fn main() {
 
-    let (tx, rx) = mpsc::unbounded_channel();
+    let args = Arguments::parse();
 
-    // http://petr.lastovicka.sweb.cz/protocl2en.htm    
+    match args.verb {
+        Some(Verb::Generate { filepath  }) => {
+            let (tx, rx) = mpsc::unbounded_channel();
 
-    //tx.send(("INFO max_node 120000\n".to_string(), None)).unwrap();
-    //tx.send(("INFO caution_factor 2\n".to_string(), None)).unwrap();
-    tx.send(("info show_detail 1\n".to_string(), None)).unwrap();
-    tx.send(("INFO thread_split_depth 5\n".to_string(), None)).unwrap();
-    tx.send(("INFO max_thread_num 16\n".to_string(), None) ).unwrap();
-    tx.send(("INFO thread_num 16\n".to_string(), None) ).unwrap();
-    tx.send(("INFO rule 2\n".to_string(), None)).unwrap();
-    tx.send(("INFO max_node -1\n".to_string(), None)).unwrap();
-    tx.send(("INFO max_depth 100\n".to_string(), None)).unwrap();
-    tx.send(("INFO time_increment 0\n".to_string(), None)).unwrap();
-    
-    
-    tx.send(("START 15 15\n".to_string(), None)).unwrap();
-    tx.send(("RESTART\n".to_string(), None)).unwrap();
-   
-    
-    tokio::spawn(async move {
-        match_routine(tx).await;
-    });
+            // http://petr.lastovicka.sweb.cz/protocl2en.htm    
 
-    run("C:\\projects\\renju\\match_generator\\Yixin\\engine.exe", Vec::new(), rx).await;
+            //tx.send(("INFO max_node 120000\n".to_string(), None)).unwrap();
+            //tx.send(("INFO caution_factor 2\n".to_string(), None)).unwrap();
+            tx.send(("info show_detail 1\n".to_string(), None)).unwrap();
+            tx.send(("INFO thread_split_depth 5\n".to_string(), None)).unwrap();
+            tx.send(("INFO max_thread_num 16\n".to_string(), None) ).unwrap();
+            tx.send(("INFO thread_num 16\n".to_string(), None) ).unwrap();
+            tx.send(("INFO rule 2\n".to_string(), None)).unwrap();
+            tx.send(("INFO max_node -1\n".to_string(), None)).unwrap();
+            tx.send(("INFO max_depth 100\n".to_string(), None)).unwrap();
+            tx.send(("INFO time_increment 0\n".to_string(), None)).unwrap();
+            
+            
+            tx.send(("START 15 15\n".to_string(), None)).unwrap();
+            tx.send(("RESTART\n".to_string(), None)).unwrap();
+        
+            
+            tokio::spawn(async move {
+                match_routine(tx).await;
+            });
+
+            run(&filepath, Vec::new(), rx).await;
+        }
+        Some(Verb::Export { filepath }) => {
+            let file = OpenOptions::new()
+                .read(false)
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(filepath)
+                .expect("Unable to open file for writting");
+            let mut file = std::io::BufWriter::new(file);
+ 
+            let db = Database::default();
+            traverse( &db, &mut file, 3);
+        }
+        None => {
+                        
+        }
+    }
+
+    println!("Exiting...");
+    
 }
+
+fn traverse(db : &Database, writer: &mut std::io::BufWriter<File>, pieces : i32) -> () {
+    let turns = db.query_by_pieces(pieces);
+    if !turns.is_empty() {
+        turns.iter().for_each( |turn| write_turn( &db, writer, turn) );
+        return traverse( db, writer, pieces+1);
+    }
+    ()
+}
+
+fn write_turn(db : &Database, writer: &mut std::io::BufWriter<File>, turn :&Turn) {
+    
+    let moves = db.query_by_previd(turn.rowid);
+    if !moves.is_empty() {
+        let answer = match parse_answer(&moves[0].answer) {
+            None => return,
+            Some(tuple) => tuple,
+        };
+        
+        let mut all_one_matrix = BoardMatrix::zeros();
+        all_one_matrix.fill(1);
+        let m = BoardMatrix::from_base81_string(&turn.key);
+        m.get_all_appearances(answer).iter().for_each( | (board, (row, col))| {
+            let (black, white) = board.split();
+            let matrixes = if turn.pieces % 2 == 0 { // next move is black
+                vec![black, white, BoardMatrix::zeros(), all_one_matrix.clone() ]
+            } else { // next move is white
+                vec![white, black, BoardMatrix::zeros(), BoardMatrix::zeros() ]
+            };
+
+            writer.write(b"[").unwrap();
+            writer.write((row*m.ncols()+col).to_string().as_bytes() ).unwrap();
+            writer.write(b"] ").unwrap();
+            writer.write(moves[0].evaluation.to_string().as_bytes() ).unwrap();
+            writer.write(b" [").unwrap();
+
+            let mut is_first = true;
+            matrixes.iter().for_each( |matrix| {
+                for r in 0..matrix.nrows() {
+                    for c in 0..matrix.ncols() {
+                        if is_first {
+                            is_first = false;
+                        } else {
+                            writer.write(b",").unwrap();
+                        }
+                        writer.write(matrix[(r, c)].to_string().as_bytes()).unwrap();
+                    }
+                }
+            });
+
+            writer.write(b"]\n").unwrap();
+
+            //m.print();
+        });
+        //board.print();
+    }
+    
+}
+
+fn parse_answer(text : &str) -> Option<(usize, usize)> {
+    let re = Regex::new(r"^(?P<row>\d{1,2}),(?P<col>\d{1,2})$").unwrap();
+    for cap in re.captures_iter(text) {
+        let row = cap["row"].parse::<usize>().unwrap();
+        let col = cap["col"].parse::<usize>().unwrap(); 
+        return Some((row, col));          
+    }
+    None
+}
+
 
 
 // https://github.com/accreator/Yixin-Board/blob/609c06015a0a239a3a5365c28ff8c7be96ecef9a/main.c#L5739
@@ -327,3 +498,5 @@ impl ReplyHanlder {
     }
 }
 
+
+//////////////////////////////////////////////////////////////////////////////////////////////////
