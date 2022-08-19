@@ -2,7 +2,7 @@
 
 #[cfg(test)]
 mod game_test {
-    use match_generator::game::*;
+    use renju_game::game::*;
     
     #[test] 
     fn test_check_position_state() {
@@ -158,103 +158,78 @@ mod game_test {
 
 
     #[test]
-    fn test_pattern()
-    {
-    BoardMatrix::generate_opening_patterns().values().enumerate().for_each( |(idx, x)| {
-        println!("{}", idx + 1);
-        x.print();
-    });
-    
-    }
-
-
-
-    #[test]
     fn test_for_each_piece()
     {
-    let mut m = BoardMatrix::zeros();
-    m[(0,0)] = 1;
-    m[(0,1)] = 1;
-    m[(0,2)] = 1;
-    m[(0,3)] = 2;
-    m[(0,4)] = 2;
-    m[(0,5)] = 1;
-    m[(0,6)] = 2;
-    m[(0,7)] = 2;
-    m[(0,8)] = 1;
-    
-    m.for_each_piece( | row, col, value | {
-        println!("{}:{} = {}", row, col, value);
-    })
+        let mut m = BoardMatrix::zeros();
+        m[(0,0)] = 1;
+        m[(0,1)] = 1;
+        m[(0,2)] = 1;
+        m[(0,3)] = 2;
+        m[(0,4)] = 2;
+        m[(0,5)] = 1;
+        m[(0,6)] = 2;
+        m[(0,7)] = 2;
+        m[(0,8)] = 1;
+        
+        m.for_each_piece( | row, col, value | {
+            println!("{}:{} = {}", row, col, value);
+        })
     }
 
 
     #[test]
     fn test_is_over()
     {
-    let mut m = BoardMatrix::zeros();
-    m[(6,6)] = 1;
-    m[(7,7)] = 1;
-    m[(8,8)] = 1;
-    m[(9,9)] = 1;
-    m[(10,10)] = 2;
-    m[(11,11)] = 1;
-    m[(12,12)] = 1;
-    m[(13,13)] = 1;
-    m[(14,14)] = 1;
-    
-    assert_eq!( m.is_over(), false);
-    m[(9,9)] = 2;
-    m[(10,10)] = 1;
-    assert_eq!( m.is_over(), true);
+        let mut m = BoardMatrix::zeros();
+        m[(6,6)] = 1;
+        m[(7,7)] = 1;
+        m[(8,8)] = 1;
+        m[(9,9)] = 1;
+        m[(10,10)] = 2;
+        m[(11,11)] = 1;
+        m[(12,12)] = 1;
+        m[(13,13)] = 1;
+        m[(14,14)] = 1;
+        
+        assert_eq!( m.is_over(), false);
+        m[(9,9)] = 2;
+        m[(10,10)] = 1;
+        assert_eq!( m.is_over(), true);
 
-    let mut m = BoardMatrix::zeros();
-    m[(0,0)] = 2;
-    m[(0,1)] = 2;
-    m[(0,2)] = 2;
-    m[(0,4)] = 2;
-    assert_eq!( m.is_over(), false);
-    m[(0,3)] = 2;
-    assert_eq!( m.is_over(), true);
-
-
-    let mut m = BoardMatrix::zeros();
-    m[(0,14)] = 1;
-    m[(0,13)] = 1;
-    m[(0,12)] = 1;
-    m[(0,11)] = 1;
-    assert_eq!( m.is_over(), false);
-    m[(0,10)] = 1;
-    assert_eq!( m.is_over(), true);
+        let mut m = BoardMatrix::zeros();
+        m[(0,0)] = 2;
+        m[(0,1)] = 2;
+        m[(0,2)] = 2;
+        m[(0,4)] = 2;
+        assert_eq!( m.is_over(), false);
+        m[(0,3)] = 2;
+        assert_eq!( m.is_over(), true);
 
 
-    let mut m = BoardMatrix::zeros();
-    m[(0,14)] = 1;
-    m[(1,14)] = 1;
-    m[(2,14)] = 1;
-    m[(3,14)] = 1;
-    m[(4,14)] = 2;
-    assert_eq!( m.is_over(), false);
-    m[(4,14)] = 1;
-    assert_eq!( m.is_over(), true);
-
-    let m = BoardMatrix::from_base81_string("0000000000000i0003r00R200p904QS08?017N01J2020001000000000");
-    m.print();
-    assert_eq!( m.is_over(), false);
-    }
+        let mut m = BoardMatrix::zeros();
+        m[(0,14)] = 1;
+        m[(0,13)] = 1;
+        m[(0,12)] = 1;
+        m[(0,11)] = 1;
+        assert_eq!( m.is_over(), false);
+        m[(0,10)] = 1;
+        assert_eq!( m.is_over(), true);
 
 
-    #[test]
-    fn test_all_appearances(){
-    let mut m = BoardMatrix::zeros();
-    m[(0,0)] = 1;
-    m[(0,1)] = 2;
-    m[(1,0)] = 1;
+        let mut m = BoardMatrix::zeros();
+        m[(0,14)] = 1;
+        m[(1,14)] = 1;
+        m[(2,14)] = 1;
+        m[(3,14)] = 1;
+        m[(4,14)] = 2;
+        assert_eq!( m.is_over(), false);
+        m[(4,14)] = 1;
+        assert_eq!( m.is_over(), true);
 
-    m.get_all_appearances((1,1)).iter().for_each( |(board, answer)| {
-        board.print();
-        println!("{:?}", answer);
-    });
+        let m = BoardMatrix::from_base81_string("0000000000000i0003r00R200p904QS08?017N01J2020001000000000");
+        m.print();
+        assert_eq!( m.is_over(), false);
+        
     }
 }
 

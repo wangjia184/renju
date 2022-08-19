@@ -1,6 +1,8 @@
 extern crate clap;
+extern crate tensorflow;
 
 use clap::{Parser, Args, Subcommand};
+
 
 
 use regex::{self, Regex};
@@ -10,11 +12,16 @@ use tokio::io::{AsyncWriteExt, BufReader, AsyncBufReadExt, BufWriter};
 use tokio::process::{ Command };
 use tokio::time::{self, Duration, Instant};
 
+use tensorflow::Tensor;
+use rayon::prelude::*;
+use rand::thread_rng;
+use rand::seq::SliceRandom;
+
+use std::fs;
 use std::time::{ SystemTime};
 use std::process::Stdio;
 use std::collections::VecDeque;
-use std::io::prelude::*;
-use std::fs::{ File, OpenOptions };
+
 
 mod game;
 mod storage;
@@ -22,6 +29,8 @@ mod mcts;
 use game::{BoardMatrix, Board};
 use storage::{ Turn, Database };
 
+mod model;
+use model::{ PolicyValueModel };
 
 
 
@@ -87,19 +96,196 @@ enum Verb {
 
     /// Exporting matches to dataset for training
     #[clap(after_help=EXPORT_DATASET_HELP_TEXT)]
-    Export
+    Train
     { 
-        /// Path to YiXin.exe
-        #[clap(required = true)]
-        filepath: String
+
     },
 }
+
+#[derive(Debug)]
+struct TrainInput(Tensor<f32>/*state [1, 4, 15, 15] */, Tensor<f32> /* probs [1, 225] */, Tensor<f32> /* winner [1] */);
+
+
+struct DataSet {
+    records : Vec<TrainInput>,
+}
+
+
+impl DataSet {
+    pub fn new() -> Self {
+        let mut instance = Self {
+            records : Vec::with_capacity(10000000),
+        };
+        DataSet::traverse_boards( 3, &mut instance.records);
+        println!("Loaded {} situations", instance.records.len());
+        instance
+    }
+
+    pub fn shuffle(self : &mut Self) -> &Vec<TrainInput> {
+        self.records.shuffle(&mut thread_rng());
+
+        &self.records
+    }
+
+    fn traverse_boards(pieces : i32, vector : &mut Vec<TrainInput>) -> () {
+        let db = Database::default();
+        let turns = db.query_by_pieces(pieces);
+        drop(db);
+        if !turns.is_empty() {
+            let v : Vec<TrainInput> = turns.into_par_iter()
+                .map( |turn| DataSet::parse_turn(turn) )
+                .flatten()
+                .collect();
+            vector.extend(v);
+            return DataSet::traverse_boards( pieces+1, vector);
+        }
+        ()
+    }
+    
+    fn parse_turn(turn :Turn) -> Vec<TrainInput> {
+
+        let mut vector = Vec::<TrainInput>::with_capacity(8); // 8 appearances
+
+        let db = Database::default();
+        let moves = db.query_by_previd(turn.rowid);
+        drop(db);
+        if !moves.is_empty() {
+
+            let prev_move = match DataSet::parse_answer(&turn.answer) {
+                None => return vector,
+                Some(tuple) => tuple,
+            };
+            
+            let answer = match DataSet::parse_answer(&moves[0].answer) {
+                None => return vector,
+                Some(tuple) => tuple,
+            };
+            
+            let mut all_one_matrix = BoardMatrix::zeros();
+            all_one_matrix.fill(1);
+            let m = BoardMatrix::from_base81_string(&turn.key);
+            m.get_all_appearances(prev_move, answer).iter().for_each( | (board, last_move, next_move ) | {
+
+                let (black, white) = board.get_blacks_whites();
+
+                let mut state_tensor = Tensor::<f32>::new(&[1, 4, 15, 15]);
+
+                if turn.pieces % 2 == 0 { // next move is black
+                    black.row_iter().enumerate().for_each( | (row_idx, row) | {
+                        row.iter().enumerate().for_each( | (col_idx, val) | {
+                            state_tensor[row_idx*black.ncols() + col_idx] = *val as f32
+                        });
+                    });
+                    let base_index = state_tensor.get_index(&[0, 1, 0, 0]);
+                    white.row_iter().enumerate().for_each( | (row_idx, row) | {
+                        row.iter().enumerate().for_each( | (col_idx, val) | {
+                            state_tensor[base_index + row_idx*white.ncols() + col_idx] = *val as f32
+                        });
+                    });
+
+                } else { // next move is white
+                    white.row_iter().enumerate().for_each( | (row_idx, row) | {
+                        row.iter().enumerate().for_each( | (col_idx, val) | {
+                            state_tensor[row_idx*white.ncols() + col_idx] = *val as f32
+                        });
+                    });
+                    let base_index = state_tensor.get_index(&[0, 1, 0, 0]);
+                    black.row_iter().enumerate().for_each( | (row_idx, row) | {
+                        row.iter().enumerate().for_each( | (col_idx, val) | {
+                            state_tensor[base_index + row_idx*black.ncols() + col_idx] = *val as f32
+                        });
+                    });
+                };
+
+                let index = state_tensor.get_index(&[0, 2, last_move.0 as u64, last_move.1 as u64]);
+                state_tensor[index] = 1f32;
+
+                if turn.pieces % 2 == 0 { // next move is black {
+                    let base_index = state_tensor.get_index(&[0, 3, 0, 0]);
+                    for index in base_index..state_tensor.len() {
+                        state_tensor[index] = 1f32;
+                    }
+                }
+                
+
+                let mut action_probs = Tensor::<f32>::new(&[1, 15 * 15]);
+                let index = action_probs.get_index(&[0, next_move.0 as u64 * 15 + next_move.1 as u64]);
+                action_probs[index] = 1f32;
+
+
+                let mut winner_tensor = Tensor::<f32>::new(&[1]);
+                if turn.evaluation >= 10000 {
+                    winner_tensor[0] = 1f32;
+                } else if turn.evaluation <= -10000 {
+                    winner_tensor[0] = -1f32;
+                } else {
+                    winner_tensor[0] = turn.evaluation as f32 / 10000f32;
+                }
+
+                vector.push(TrainInput(state_tensor, action_probs, winner_tensor));
+            });
+        }
+        vector
+    }
+
+
+    fn parse_answer(text : &str) -> Option<(usize, usize)> {
+        let re = Regex::new(r"^(?P<row>\d{1,2}),(?P<col>\d{1,2})$").unwrap();
+        for cap in re.captures_iter(text) {
+            let row = cap["row"].parse::<usize>().unwrap();
+            let col = cap["col"].parse::<usize>().unwrap(); 
+            return Some((row, col));          
+        }
+        None
+    }
+}
+
+fn test() {
+    let export_dir = "/Users/jerry/projects/renju/renju.git/game/renju_15x15_model/";
+
+    let ai_model = PolicyValueModel::load(export_dir).expect("Unable to load model");
+
+    let checkpoint_filename = "/Users/jerry/projects/renju/renju.git/game/saved.ckpt";
+    if fs::metadata(checkpoint_filename).is_ok() {
+        match ai_model.restore(checkpoint_filename) {
+            Err(e) => {
+                println!("WARNING : Unable to restore checkpoint {}. {}", checkpoint_filename, e);
+            },
+            _ => {
+                println!("Successfully loaded checkpoint {}", checkpoint_filename);
+            }
+        }
+    }
+    
+
+    let mut ds = DataSet::new();    
+
+    let records = ds.shuffle();
+
+    let mut count = 0;
+    for TrainInput(state_batch, mcts_probs, winner_batch) in records {
+        match ai_model.train(state_batch, mcts_probs, winner_batch) {
+            Err(e) => panic!("Error when trainning. {}", e),
+            Ok((loss, entropy)) => {
+                count += 1;
+                if count % 1000 == 0 {
+                    println!("{} : loss={}; entropy={}", count, loss, entropy);
+                }
+            },
+        };
+    }
+    
+    ai_model.save(checkpoint_filename).expect("Unable to save");
+
+}
+
 
 
 
 
 #[tokio::main(flavor = "current_thread")] // use single-threaded runtime
 async fn main() {
+    test();
 
     let args = Arguments::parse();
 
@@ -131,18 +317,8 @@ async fn main() {
 
             run(&filepath, Vec::new(), rx).await;
         }
-        Some(Verb::Export { filepath }) => {
-            let file = OpenOptions::new()
-                .read(false)
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open(filepath)
-                .expect("Unable to open file for writting");
-            let mut file = std::io::BufWriter::new(file);
- 
-            let db = Database::default();
-            traverse( &db, &mut file, 3);
+        Some(Verb::Train {}) => {
+
         }
         None => {
                         
@@ -153,73 +329,9 @@ async fn main() {
     
 }
 
-fn traverse(db : &Database, writer: &mut std::io::BufWriter<File>, pieces : i32) -> () {
-    let turns = db.query_by_pieces(pieces);
-    if !turns.is_empty() {
-        turns.iter().for_each( |turn| write_turn( &db, writer, turn) );
-        return traverse( db, writer, pieces+1);
-    }
-    ()
-}
 
-fn write_turn(db : &Database, writer: &mut std::io::BufWriter<File>, turn :&Turn) {
-    
-    let moves = db.query_by_previd(turn.rowid);
-    if !moves.is_empty() {
-        let answer = match parse_answer(&moves[0].answer) {
-            None => return,
-            Some(tuple) => tuple,
-        };
-        
-        let mut all_one_matrix = BoardMatrix::zeros();
-        all_one_matrix.fill(1);
-        let m = BoardMatrix::from_base81_string(&turn.key);
-        m.get_all_appearances(answer).iter().for_each( | (board, (row, col))| {
-            let (black, white) = board.split();
-            let matrixes = if turn.pieces % 2 == 0 { // next move is black
-                vec![black, white, BoardMatrix::zeros(), all_one_matrix.clone() ]
-            } else { // next move is white
-                vec![white, black, BoardMatrix::zeros(), BoardMatrix::zeros() ]
-            };
 
-            writer.write(b"[").unwrap();
-            writer.write((row*m.ncols()+col).to_string().as_bytes() ).unwrap();
-            writer.write(b"] ").unwrap();
-            writer.write(moves[0].evaluation.to_string().as_bytes() ).unwrap();
-            writer.write(b" [").unwrap();
 
-            let mut is_first = true;
-            matrixes.iter().for_each( |matrix| {
-                for r in 0..matrix.nrows() {
-                    for c in 0..matrix.ncols() {
-                        if is_first {
-                            is_first = false;
-                        } else {
-                            writer.write(b",").unwrap();
-                        }
-                        writer.write(matrix[(r, c)].to_string().as_bytes()).unwrap();
-                    }
-                }
-            });
-
-            writer.write(b"]\n").unwrap();
-
-            //m.print();
-        });
-        //board.print();
-    }
-    
-}
-
-fn parse_answer(text : &str) -> Option<(usize, usize)> {
-    let re = Regex::new(r"^(?P<row>\d{1,2}),(?P<col>\d{1,2})$").unwrap();
-    for cap in re.captures_iter(text) {
-        let row = cap["row"].parse::<usize>().unwrap();
-        let col = cap["col"].parse::<usize>().unwrap(); 
-        return Some((row, col));          
-    }
-    None
-}
 
 
 
@@ -312,18 +424,6 @@ async fn match_routine(tx : UnboundedSender<(String, Option<oneshot::Sender<(i8,
     let mut pieces = 10;
 
     let db = Database::default();
-    BoardMatrix::generate_opening_patterns().iter().for_each( |(key, _)| {
-        db.insert_only(&Turn{
-            rowid : 0,
-            previd : 0,
-            key : key.to_owned(),
-            answer : String::default(),
-            evaluation : 0,
-            pieces : 3,
-            over : false,
-        });
-    });
-
     db.store();
 
     //tx.send("yxblockreset\n".to_string()).unwrap();

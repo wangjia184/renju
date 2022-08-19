@@ -1,5 +1,25 @@
 # 对弈生成器，数据用于初始化策略网络
 
+
+https://gist.github.com/lnshi/eb3dea05d99daba5c932bbc786cc3701
+
+```
+sudo mkdir -p /usr/local/lib/libtensorflow-cpu-darwin-arm64-2.9.0
+
+sudo tar -C /usr/local/lib/libtensorflow-cpu-darwin-arm64-2.9.0 -xzf bazel-bin/tensorflow/tools/lib_package/libtensorflow.tar.gz
+```
+
+cd /usr/local/lib/libtensorflow-cpu-darwin-arm64-2.9.0/lib
+
+
+export DYLD_LIBRARY_PATH=/opt/homebrew/opt/tensorflow/lib
+export DYLD_LIBRARY_PATH="$DYLD_LIBRARY_PATH":~/opt/anaconda3/envs/ml/lib/python3.9/site-packages/tensorflow-plugins
+
+
+
+```
+
+```
 ## 不同的棋局相同的局面
 
 对于同一局面，可能存在多达八种雷同棋局。如下所示两种棋局相互可以通过翻转和旋转得到。在训练时同一局面的雷同棋局都需要训练，但在生成对弈棋局的时候需要避免计算雷同棋局。

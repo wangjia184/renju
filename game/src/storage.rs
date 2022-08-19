@@ -46,7 +46,7 @@ impl Default for Database {
               println!("WARNING: unable to restore backup database");
             }
           } else {
-            println!("WARNING: unable to open backup database");
+            println!("WARNING: unable to open backup database. {}", backup_filename);
           }
           
 

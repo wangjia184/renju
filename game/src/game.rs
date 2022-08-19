@@ -1,7 +1,7 @@
 
 
 
-use std::{cmp::Ordering, collections::HashMap};
+use std::{collections::HashMap};
 
 use nalgebra::{ SMatrix};
 use num_traits::identities::{ Zero };
@@ -16,16 +16,14 @@ pub type BoardMatrix = SMatrix<u8, SIZE, SIZE>;
 pub trait Board {
   fn print(self: &Self);
   
-  fn mediocritize(self : &mut Self) ->  String;
   fn from_base81_string(text : &str) -> Self;
   fn to_base81_string(self: &Self) -> String;
-  fn generate_opening_patterns() -> HashMap<String, Self> where Self : Sized;
   fn for_each_piece<F : FnMut(usize, usize, u8)>(self : &Self, cb : F);
   fn is_over(self : &Self) -> bool;
   fn check_black_in_position( self : &Self, position:(usize, usize)) -> RowState;
   fn is_forbidden(self : &Self, position:(usize, usize)) -> bool;
-  fn get_all_appearances(self : &Self, answer : (usize, usize)) -> Vec<(BoardMatrix, (usize, usize))>;
-  fn split(self : &Self) -> (BoardMatrix/*black*/, BoardMatrix/*white */);
+  fn get_all_appearances(self : &Self, last_move : (usize, usize),  answer : (usize, usize)) -> Vec<(BoardMatrix, (usize, usize), (usize, usize))>;
+  fn get_blacks_whites(self : &Self) -> (BoardMatrix/*black*/, BoardMatrix/*white */);
 }
 
 
@@ -253,6 +251,7 @@ impl Board for BoardMatrix {
   }
 
   // https://www.wuziqi123.com/jiangzuo/dingshiyanjiu/156.html
+  /*
   fn generate_opening_patterns() -> HashMap<String, Self> where Self : Sized
   {
     let mut map = HashMap::new();
@@ -286,7 +285,7 @@ impl Board for BoardMatrix {
     }
     map
   }
-
+   */
 
   fn from_base81_string(text : &str) -> Self {
     let mut m = BoardMatrix::zero();
@@ -409,128 +408,67 @@ impl Board for BoardMatrix {
 
 
 
-  fn mediocritize(self : &mut BoardMatrix) -> String {
-    let mut min_matrix : Option<&BoardMatrix> = None;
-    let mut min_id = self.to_base81_string();
 
-    let mut m1 = self.clone();
-    flip_main_diagonal(&mut m1);
-    let id = m1.to_base81_string();
-    if id.cmp(&min_id) == Ordering::Less {
-      min_id = id;
-      min_matrix = Some(&m1);
-    }
-
-    let mut m2 = m1.clone();
-    flip_vertical(&mut m2);
-    let id = m2.to_base81_string();
-    if id.cmp(&min_id) == Ordering::Less {
-      min_id = id;
-      min_matrix = Some(&m2);
-    }
-
-    let mut m3 = self.clone();
-    flip_anti_diagonal(&mut m3);
-    let id = m3.to_base81_string();
-    if id.cmp(&min_id) == Ordering::Less {
-      min_id = id;
-      min_matrix = Some(&m3);
-    }
-
-    let mut m4 = m3.clone();
-    flip_vertical(&mut m4);
-    let id = m4.to_base81_string();
-    if id.cmp(&min_id) == Ordering::Less {
-      min_id = id;
-      min_matrix = Some(&m4);
-    }
-
-    let mut m5 = self.clone();
-    flip_horizontal(&mut m5);
-    let id = m5.to_base81_string();
-    if id.cmp(&min_id) == Ordering::Less {
-      min_id = id;
-      min_matrix = Some(&m5);
-    }
-
-    let mut m6 = self.clone();
-    flip_vertical(&mut m6);
-    let id = m6.to_base81_string();
-    if id.cmp(&min_id) == Ordering::Less {
-      min_id = id;
-      min_matrix = Some(&m6);
-    }
-
-    let mut m7 = m6.clone();
-    flip_horizontal(&mut m7);
-    let id = m7.to_base81_string();
-    if id.cmp(&min_id) == Ordering::Less {
-      min_id = id;
-      min_matrix = Some(&m7);
-    }
-
-    if let Some(m) = min_matrix {
-        self.copy_from(m);
-    }
-
-    min_id
-    
-  }
-
-
-  fn get_all_appearances(self : &BoardMatrix, answer : (usize, usize)) -> Vec<(BoardMatrix, (usize, usize))> {
+  fn get_all_appearances(self : &BoardMatrix, last_move : (usize, usize), answer : (usize, usize)) -> Vec<(BoardMatrix, (usize, usize), (usize, usize))> {
     let mut hash_map = HashMap::new();
 
     let mut m1 = self.clone();
     flip_main_diagonal(&mut m1);
     let id1 = m1.to_base81_string();
     let answer1 = main_diagonal_transform(answer);
+    let last_move1 = main_diagonal_transform(last_move);
  
     let mut m2 = m1.clone();
     flip_vertical(&mut m2);
     let id2 = m2.to_base81_string();
     let answer2 = vertical_transform(answer1);
+    let last_move2 = vertical_transform(last_move1);
 
     let mut m3 = self.clone();
     flip_anti_diagonal(&mut m3);
     let id3 = m3.to_base81_string();
     let answer3 = anti_diagonal_transform(answer);
+    let last_move3 = anti_diagonal_transform(last_move);
 
     let mut m4 = m3.clone();
     flip_vertical(&mut m4);
     let id4 = m4.to_base81_string();
     let answer4 = vertical_transform(answer3);
+    let last_move4 = vertical_transform(last_move3);
 
     let mut m5 = self.clone();
     flip_horizontal(&mut m5);
     let id5 = m5.to_base81_string();
     let answer5 = horizontal_transform(answer);
+    let last_move5 = horizontal_transform(last_move);
 
     let mut m6 = self.clone();
     flip_vertical(&mut m6);
     let id6 = m6.to_base81_string();
     let answer6 = vertical_transform(answer);
+    let last_move6 = vertical_transform(last_move);
 
     let mut m7 = m6.clone();
     flip_horizontal(&mut m7);
     let id7 = m7.to_base81_string();
     let answer7 = horizontal_transform(answer6);
+    let last_move7 = horizontal_transform(last_move6);
 
-    hash_map.insert(id1, (m1, answer1));
-    hash_map.insert(id2, (m2, answer2));
-    hash_map.insert(id3, (m3, answer3));
-    hash_map.insert(id4, (m4, answer4));
-    hash_map.insert(id5, (m5, answer5));
-    hash_map.insert(id6, (m6, answer6));
-    hash_map.insert(id7, (m7, answer7));
-    hash_map.insert(self.to_base81_string(), (self.clone(), answer));
+    hash_map.insert(id1, (m1, last_move1, answer1));
+    hash_map.insert(id2, (m2, last_move2, answer2));
+    hash_map.insert(id3, (m3, last_move3, answer3));
+    hash_map.insert(id4, (m4, last_move4, answer4));
+    hash_map.insert(id5, (m5, last_move5, answer5));
+    hash_map.insert(id6, (m6, last_move6, answer6));
+    hash_map.insert(id7, (m7, last_move7, answer7));
+    hash_map.insert(self.to_base81_string(), (self.clone(), last_move, answer));
 
     hash_map.into_values().collect()
     
   }
   
 
-  fn split(self : &Self) -> (BoardMatrix/*black*/, BoardMatrix/*white */) {
+  fn get_blacks_whites(self : &Self) -> (BoardMatrix/*black*/, BoardMatrix/*white */) {
     let mut black = BoardMatrix::zeros();
     let mut white = BoardMatrix::zeros();
 
@@ -647,26 +585,6 @@ fn test_base81(){
 }
 
 
-
-#[test]
-pub fn test()
-{
-  let mut m1 = BoardMatrix::zero();
-  m1[(0,0)] = 1;
-  m1[(0,1)] = 2;
-  let id1 = m1.mediocritize();
-  //print_board(&m1);
-
- 
-  let mut m3 = BoardMatrix::zero();
-  m3[(0,14)] = 1;
-  m3[(0,13)] = 2;
-  let id3 = m1.mediocritize();
-  //print_board(&m3);
-  assert_eq!(m1 , m3);
-  assert_eq!(id1, id3);
-  
-}
 
 
 fn swap(m : &mut BoardMatrix, pos1 : (usize, usize), pos2 : (usize, usize)){

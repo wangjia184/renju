@@ -1,5 +1,5 @@
 [package]
-name = "match_generator"
+name = "renju_game"
 version = "0.1.0"
 edition = "2021"
 
@@ -10,7 +10,10 @@ tokio-util = { version = "0.7.2", features = ["io" ] }
 nalgebra = "0.31.0"
 num-traits = "0.2.15"
 regex = "1.6.0"
-
+tensorflow = { path = "./tensorflow/rust" }
+tensorflow-sys = { path = "./tensorflow/rust/tensorflow-sys", features=["runtime_linking"] }
+rayon = "1.5.3"
+rand = "0.8.5"
 # `bundled` causes us to automatically compile and link in an up to date
 # version of SQLite for you. This avoids many common build issues, and
 # avoids depending on the version of SQLite on the users system (or your
@@ -33,12 +36,12 @@ features = [
 ]
 
 
-[dev-dependencies]
-rand = "0.8.5"
-
 
 [profile.release]
 strip = true  # Automatically strip symbols from the binary.
 opt-level = "z"  # Optimize for size.
 lto = true
 codegen-units = 1
+
+
+
