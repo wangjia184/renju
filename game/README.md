@@ -1,5 +1,6 @@
 # 对弈生成器，数据用于初始化策略网络
 
+https://zhuanlan.zhihu.com/p/59567014
 
 https://gist.github.com/lnshi/eb3dea05d99daba5c932bbc786cc3701
 

@@ -1,58 +1,51 @@
 extern crate clap;
 extern crate tensorflow;
 
-use clap::{Parser, Args, Subcommand};
-
-
+use clap::{Args, Parser, Subcommand};
 
 use regex::{self, Regex};
-use tokio::sync::mpsc::{ self, UnboundedReceiver, UnboundedSender };
+
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
+use tokio::process::Command;
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
-use tokio::io::{AsyncWriteExt, BufReader, AsyncBufReadExt, BufWriter};
-use tokio::process::{ Command };
 use tokio::time::{self, Duration, Instant};
 
-use tensorflow::Tensor;
-use rayon::prelude::*;
-use rand::thread_rng;
 use rand::seq::SliceRandom;
+use rand::thread_rng;
+use rayon::prelude::*;
+use tensorflow::Tensor;
 
-use std::fs;
-use std::time::{ SystemTime};
-use std::process::Stdio;
 use std::collections::VecDeque;
-
+use std::fs;
+use std::process::Stdio;
+use std::time::SystemTime;
 
 mod game;
-mod storage;
 mod mcts;
-use game::{BoardMatrix, Board};
-use storage::{ Turn, Database };
+mod storage;
+use game::{BoardMatrix, BoardMatrixExtension, RenjuBoard};
+use mcts::TreeSearcher;
+use storage::{Database, Turn};
 
 mod model;
-use model::{ PolicyValueModel };
+use model::PolicyValueModel;
 
+static ABOUT_TEXT: &str = "Renju game ";
 
-
-static ABOUT_TEXT : &str = "Renju game ";
-
-static GENERATE_MATCH_HELP_TEXT : &str = "
+static GENERATE_MATCH_HELP_TEXT: &str = "
 Using YiXin.exe to generate match 
 ";
 
-static EXPORT_DATASET_HELP_TEXT : &str = "
+static EXPORT_DATASET_HELP_TEXT: &str = "
 Export matches into training dataset
 ";
-
-
-
 
 /// File Scanner
 #[derive(Parser, Debug)]
 #[clap(author, version, about = ABOUT_TEXT, long_about = Some(ABOUT_TEXT), trailing_var_arg=true)]
 struct Arguments {
-
-/*
+    /*
     /// The root folder on local filesystem to scan
     #[clap(display_order=1, short, long, default_value_t = utils::get_current_dir())]
     folder: String,
@@ -77,170 +70,169 @@ struct Arguments {
     #[clap(display_order=6, short, long)]
     user: Option<String>,
      */
-
     #[clap(subcommand)]
     verb: Option<Verb>,
 }
-
 
 #[derive(Subcommand, Debug)]
 enum Verb {
     /// Generating matches
     #[clap(after_help=GENERATE_MATCH_HELP_TEXT)]
-    Generate 
-    { 
+    Generate {
         /// Path to YiXin.exe
         #[clap(required = true)]
-        filepath: String
+        filepath: String,
     },
 
     /// Exporting matches to dataset for training
     #[clap(after_help=EXPORT_DATASET_HELP_TEXT)]
-    Train
-    { 
-
-    },
+    Train {},
 }
 
 #[derive(Debug)]
-struct TrainInput(Tensor<f32>/*state [1, 4, 15, 15] */, Tensor<f32> /* probs [1, 225] */, Tensor<f32> /* winner [1] */);
-
+struct TrainInput(
+    Tensor<f32>, /*state [1, 4, 15, 15] */
+    Tensor<f32>, /* probs [1, 225] */
+    Tensor<f32>, /* winner [1] */
+);
 
 struct DataSet {
-    records : Vec<TrainInput>,
+    records: Vec<TrainInput>,
 }
-
 
 impl DataSet {
     pub fn new() -> Self {
         let mut instance = Self {
-            records : Vec::with_capacity(10000000),
+            records: Vec::with_capacity(20000000),
         };
-        DataSet::traverse_boards( 3, &mut instance.records);
+        DataSet::traverse_boards(3, &mut instance.records);
         println!("Loaded {} situations", instance.records.len());
         instance
     }
 
-    pub fn shuffle(self : &mut Self) -> &Vec<TrainInput> {
+    pub fn shuffle(self: &mut Self) -> &Vec<TrainInput> {
         self.records.shuffle(&mut thread_rng());
 
         &self.records
     }
 
-    fn traverse_boards(pieces : i32, vector : &mut Vec<TrainInput>) -> () {
+    fn traverse_boards(pieces: i32, vector: &mut Vec<TrainInput>) -> () {
         let db = Database::default();
         let turns = db.query_by_pieces(pieces);
         drop(db);
         if !turns.is_empty() {
-            let v : Vec<TrainInput> = turns.into_par_iter()
-                .map( |turn| DataSet::parse_turn(turn) )
+            let v: Vec<TrainInput> = turns
+                .into_par_iter()
+                .map(|turn| DataSet::parse_turn(turn))
                 .flatten()
                 .collect();
             vector.extend(v);
-            return DataSet::traverse_boards( pieces+1, vector);
+            return DataSet::traverse_boards(pieces + 1, vector);
         }
         ()
     }
-    
-    fn parse_turn(turn :Turn) -> Vec<TrainInput> {
 
+    fn parse_turn(turn: Turn) -> Vec<TrainInput> {
         let mut vector = Vec::<TrainInput>::with_capacity(8); // 8 appearances
 
         let db = Database::default();
         let moves = db.query_by_previd(turn.rowid);
         drop(db);
         if !moves.is_empty() {
-
             let prev_move = match DataSet::parse_answer(&turn.answer) {
                 None => return vector,
                 Some(tuple) => tuple,
             };
-            
+
             let answer = match DataSet::parse_answer(&moves[0].answer) {
                 None => return vector,
                 Some(tuple) => tuple,
             };
-            
+
             let mut all_one_matrix = BoardMatrix::zeros();
             all_one_matrix.fill(1);
-            let m = BoardMatrix::from_base81_string(&turn.key);
-            m.get_all_appearances(prev_move, answer).iter().for_each( | (board, last_move, next_move ) | {
+            let m: BoardMatrix = BoardMatrixExtension::from_base81_string(&turn.key);
+            m.get_all_appearances(prev_move, answer).iter().for_each(
+                |(board, last_move, next_move)| {
+                    let (black, white) = board.get_blacks_whites();
 
-                let (black, white) = board.get_blacks_whites();
+                    let mut state_tensor = Tensor::<f32>::new(&[1, 4, 15, 15]);
 
-                let mut state_tensor = Tensor::<f32>::new(&[1, 4, 15, 15]);
-
-                if turn.pieces % 2 == 0 { // next move is black
-                    black.row_iter().enumerate().for_each( | (row_idx, row) | {
-                        row.iter().enumerate().for_each( | (col_idx, val) | {
-                            state_tensor[row_idx*black.ncols() + col_idx] = *val as f32
+                    if turn.pieces % 2 == 0 {
+                        // next move is black
+                        black.row_iter().enumerate().for_each(|(row_idx, row)| {
+                            row.iter().enumerate().for_each(|(col_idx, val)| {
+                                state_tensor[row_idx * black.ncols() + col_idx] = *val as f32
+                            });
                         });
-                    });
-                    let base_index = state_tensor.get_index(&[0, 1, 0, 0]);
-                    white.row_iter().enumerate().for_each( | (row_idx, row) | {
-                        row.iter().enumerate().for_each( | (col_idx, val) | {
-                            state_tensor[base_index + row_idx*white.ncols() + col_idx] = *val as f32
+                        let base_index = state_tensor.get_index(&[0, 1, 0, 0]);
+                        white.row_iter().enumerate().for_each(|(row_idx, row)| {
+                            row.iter().enumerate().for_each(|(col_idx, val)| {
+                                state_tensor[base_index + row_idx * white.ncols() + col_idx] =
+                                    *val as f32
+                            });
                         });
-                    });
-
-                } else { // next move is white
-                    white.row_iter().enumerate().for_each( | (row_idx, row) | {
-                        row.iter().enumerate().for_each( | (col_idx, val) | {
-                            state_tensor[row_idx*white.ncols() + col_idx] = *val as f32
+                    } else {
+                        // next move is white
+                        white.row_iter().enumerate().for_each(|(row_idx, row)| {
+                            row.iter().enumerate().for_each(|(col_idx, val)| {
+                                state_tensor[row_idx * white.ncols() + col_idx] = *val as f32
+                            });
                         });
-                    });
-                    let base_index = state_tensor.get_index(&[0, 1, 0, 0]);
-                    black.row_iter().enumerate().for_each( | (row_idx, row) | {
-                        row.iter().enumerate().for_each( | (col_idx, val) | {
-                            state_tensor[base_index + row_idx*black.ncols() + col_idx] = *val as f32
+                        let base_index = state_tensor.get_index(&[0, 1, 0, 0]);
+                        black.row_iter().enumerate().for_each(|(row_idx, row)| {
+                            row.iter().enumerate().for_each(|(col_idx, val)| {
+                                state_tensor[base_index + row_idx * black.ncols() + col_idx] =
+                                    *val as f32
+                            });
                         });
-                    });
-                };
+                    };
 
-                let index = state_tensor.get_index(&[0, 2, last_move.0 as u64, last_move.1 as u64]);
-                state_tensor[index] = 1f32;
+                    let index =
+                        state_tensor.get_index(&[0, 2, last_move.0 as u64, last_move.1 as u64]);
+                    state_tensor[index] = 1f32;
 
-                if turn.pieces % 2 == 0 { // next move is black {
-                    let base_index = state_tensor.get_index(&[0, 3, 0, 0]);
-                    for index in base_index..state_tensor.len() {
-                        state_tensor[index] = 1f32;
+                    if turn.pieces % 2 == 0 {
+                        // next move is black {
+                        let base_index = state_tensor.get_index(&[0, 3, 0, 0]);
+                        for index in base_index..state_tensor.len() {
+                            state_tensor[index] = 1f32;
+                        }
                     }
-                }
-                
 
-                let mut action_probs = Tensor::<f32>::new(&[1, 15 * 15]);
-                let index = action_probs.get_index(&[0, next_move.0 as u64 * 15 + next_move.1 as u64]);
-                action_probs[index] = 1f32;
+                    let mut action_probs = Tensor::<f32>::new(&[1, 15 * 15]);
+                    let index =
+                        action_probs.get_index(&[0, next_move.0 as u64 * 15 + next_move.1 as u64]);
+                    action_probs[index] = 1f32;
 
+                    let mut winner_tensor = Tensor::<f32>::new(&[1]);
+                    if turn.evaluation >= 10000 {
+                        winner_tensor[0] = 1f32;
+                    } else if turn.evaluation <= -10000 {
+                        winner_tensor[0] = -1f32;
+                    } else {
+                        winner_tensor[0] = turn.evaluation as f32 / 10000f32;
+                    }
 
-                let mut winner_tensor = Tensor::<f32>::new(&[1]);
-                if turn.evaluation >= 10000 {
-                    winner_tensor[0] = 1f32;
-                } else if turn.evaluation <= -10000 {
-                    winner_tensor[0] = -1f32;
-                } else {
-                    winner_tensor[0] = turn.evaluation as f32 / 10000f32;
-                }
-
-                vector.push(TrainInput(state_tensor, action_probs, winner_tensor));
-            });
+                    vector.push(TrainInput(state_tensor, action_probs, winner_tensor));
+                },
+            );
         }
         vector
     }
 
-
-    fn parse_answer(text : &str) -> Option<(usize, usize)> {
+    fn parse_answer(text: &str) -> Option<(usize, usize)> {
         let re = Regex::new(r"^(?P<row>\d{1,2}),(?P<col>\d{1,2})$").unwrap();
         for cap in re.captures_iter(text) {
             let row = cap["row"].parse::<usize>().unwrap();
-            let col = cap["col"].parse::<usize>().unwrap(); 
-            return Some((row, col));          
+            let col = cap["col"].parse::<usize>().unwrap();
+            return Some((row, col));
         }
         None
     }
 }
 
-fn test() {
+fn get_best_model() -> PolicyValueModel {
     let export_dir = "/Users/jerry/projects/renju/renju.git/game/renju_15x15_model/";
 
     let ai_model = PolicyValueModel::load(export_dir).expect("Unable to load model");
@@ -249,16 +241,20 @@ fn test() {
     if fs::metadata(checkpoint_filename).is_ok() {
         match ai_model.restore(checkpoint_filename) {
             Err(e) => {
-                println!("WARNING : Unable to restore checkpoint {}. {}", checkpoint_filename, e);
-            },
+                println!(
+                    "WARNING : Unable to restore checkpoint {}. {}",
+                    checkpoint_filename, e
+                );
+            }
             _ => {
                 println!("Successfully loaded checkpoint {}", checkpoint_filename);
             }
         }
     }
-    
 
-    let mut ds = DataSet::new();    
+    ai_model
+    /*
+    let mut ds = DataSet::new();
 
     let records = ds.shuffle();
 
@@ -271,80 +267,78 @@ fn test() {
                 if count % 1000 == 0 {
                     println!("{} : loss={}; entropy={}", count, loss, entropy);
                 }
-            },
+            }
         };
     }
-    
+
     ai_model.save(checkpoint_filename).expect("Unable to save");
-
+     */
 }
-
-
-
-
 
 #[tokio::main(flavor = "current_thread")] // use single-threaded runtime
 async fn main() {
-    test();
+    let model = get_best_model();
+
+    let mut searcher = TreeSearcher::new(5f32, |state_batch| {
+        model.predict(&state_batch).expect("Failed to predict")
+    });
+
+    let board = RenjuBoard::default();
+    for _ in 0..1000000 {
+        searcher.rollout(board.clone());
+    }
 
     let args = Arguments::parse();
 
     match args.verb {
-        Some(Verb::Generate { filepath  }) => {
+        Some(Verb::Generate { filepath }) => {
             let (tx, rx) = mpsc::unbounded_channel();
 
-            // http://petr.lastovicka.sweb.cz/protocl2en.htm    
+            // http://petr.lastovicka.sweb.cz/protocl2en.htm
 
             //tx.send(("INFO max_node 120000\n".to_string(), None)).unwrap();
             //tx.send(("INFO caution_factor 2\n".to_string(), None)).unwrap();
             tx.send(("info show_detail 1\n".to_string(), None)).unwrap();
-            tx.send(("INFO thread_split_depth 5\n".to_string(), None)).unwrap();
-            tx.send(("INFO max_thread_num 16\n".to_string(), None) ).unwrap();
-            tx.send(("INFO thread_num 16\n".to_string(), None) ).unwrap();
+            tx.send(("INFO thread_split_depth 5\n".to_string(), None))
+                .unwrap();
+            tx.send(("INFO max_thread_num 16\n".to_string(), None))
+                .unwrap();
+            tx.send(("INFO thread_num 16\n".to_string(), None)).unwrap();
             tx.send(("INFO rule 2\n".to_string(), None)).unwrap();
             tx.send(("INFO max_node -1\n".to_string(), None)).unwrap();
             tx.send(("INFO max_depth 100\n".to_string(), None)).unwrap();
-            tx.send(("INFO time_increment 0\n".to_string(), None)).unwrap();
-            
-            
+            tx.send(("INFO time_increment 0\n".to_string(), None))
+                .unwrap();
+
             tx.send(("START 15 15\n".to_string(), None)).unwrap();
             tx.send(("RESTART\n".to_string(), None)).unwrap();
-        
-            
+
             tokio::spawn(async move {
                 match_routine(tx).await;
             });
 
             run(&filepath, Vec::new(), rx).await;
         }
-        Some(Verb::Train {}) => {
-
-        }
-        None => {
-                        
-        }
+        Some(Verb::Train {}) => {}
+        None => {}
     }
 
     println!("Exiting...");
-    
 }
 
-
-
-
-
-
-
 // https://github.com/accreator/Yixin-Board/blob/609c06015a0a239a3a5365c28ff8c7be96ecef9a/main.c#L5739
-async fn run(app_path : &str, parameters : Vec<String>, mut input_rx : UnboundedReceiver<(String, Option<oneshot::Sender<(i8, i8, i32)>>)>){
-
+async fn run(
+    app_path: &str,
+    parameters: Vec<String>,
+    mut input_rx: UnboundedReceiver<(String, Option<oneshot::Sender<(i8, i8, i32)>>)>,
+) {
     let mut child = match Command::new(&app_path)
         .args(parameters)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
-        .spawn() 
+        .spawn()
     {
         Ok(c) => c,
         Err(e) => panic!("Unable to start process `{}`. {}", &app_path, e),
@@ -352,12 +346,20 @@ async fn run(app_path : &str, parameters : Vec<String>, mut input_rx : Unbounded
 
     let _pid = child.id().expect("child did not have a id");
 
-    let stdout = child.stdout.take().expect("child did not have a handle to stdout");
-    let stderr = child.stderr.take().expect("child did not have a handle to stderr");
+    let stdout = child
+        .stdout
+        .take()
+        .expect("child did not have a handle to stdout");
+    let stderr = child
+        .stderr
+        .take()
+        .expect("child did not have a handle to stderr");
 
-    let mut stdin = child.stdin.take().expect("child did not have a handle to stdin");
+    let mut stdin = child
+        .stdin
+        .take()
+        .expect("child did not have a handle to stdin");
     let mut stdin_writer = BufWriter::new(&mut stdin);
-    
 
     let mut stdout_reader = BufReader::new(stdout).lines();
     let mut stderr_reader = BufReader::new(stderr).lines();
@@ -372,7 +374,7 @@ async fn run(app_path : &str, parameters : Vec<String>, mut input_rx : Unbounded
                     Err(e) => {
                         eprintln!("Unable to read child process stdout. {}", e);
                         break
-                    } 
+                    }
                     _ => (),
                 }
             }
@@ -382,7 +384,7 @@ async fn run(app_path : &str, parameters : Vec<String>, mut input_rx : Unbounded
                     Err(e) => {
                         eprintln!("Unable to read child process stderr. {}", e);
                         break
-                    } 
+                    }
                     _ => (),
                 }
             }
@@ -419,8 +421,7 @@ async fn run(app_path : &str, parameters : Vec<String>, mut input_rx : Unbounded
     }
 }
 
-async fn match_routine(tx : UnboundedSender<(String, Option<oneshot::Sender<(i8, i8, i32)>>)>){
-
+async fn match_routine(tx: UnboundedSender<(String, Option<oneshot::Sender<(i8, i8, i32)>>)>) {
     let mut pieces = 10;
 
     let db = Database::default();
@@ -436,9 +437,8 @@ async fn match_routine(tx : UnboundedSender<(String, Option<oneshot::Sender<(i8,
     loop {
         let turns = db.query_by_pieces(pieces);
         for turn in turns {
-
             let moves = db.query_by_previd(turn.rowid);
-            if moves.iter().any(|x| x.evaluation <= -10000 ) {
+            if moves.iter().any(|x| x.evaluation <= -10000) {
                 continue;
             }
             match pieces {
@@ -449,17 +449,17 @@ async fn match_routine(tx : UnboundedSender<(String, Option<oneshot::Sender<(i8,
                     if moves.len() > 0 {
                         continue;
                     }
-                },
+                }
             };
-    
+
             let mut m = BoardMatrix::from_base81_string(&turn.key);
             let mut command = String::with_capacity(1024);
-    
+
             command.push_str("RESTART\nyxhashclear\nyxblockreset\n");
-    
+
             if !moves.is_empty() {
                 command.push_str("yxblock\n");
-                moves.iter().for_each( |historical_move| {
+                moves.iter().for_each(|historical_move| {
                     command.push_str(&historical_move.answer);
                     command.push_str("\n");
                 });
@@ -467,17 +467,18 @@ async fn match_routine(tx : UnboundedSender<(String, Option<oneshot::Sender<(i8,
             }
 
             command.push_str("BOARD\n");
-    
-            m.for_each_piece( |row, col, value| {
+
+            /*
+            m.for_each_piece(|row, col, value| {
                 command.push_str(&format!("{},{},{}\n", row, col, value));
-            });
-    
+            }); */
+
             command.push_str("DONE\n");
-    
+
             let (reply_tx, mut reply_rx) = oneshot::channel();
-    
-            tx.send((command, Some(reply_tx)) ).unwrap();
-    
+
+            tx.send((command, Some(reply_tx))).unwrap();
+
             println!("Evaluating {}", turn.key);
             let sleep = time::sleep(Duration::from_secs(30));
             tokio::pin!(sleep);
@@ -495,7 +496,7 @@ async fn match_routine(tx : UnboundedSender<(String, Option<oneshot::Sender<(i8,
                                         1 => 2, // white
                                         _ => unreachable!()
                                     }; // set the correct value
-                                    
+
                                     db.insert_only(&Turn{
                                         rowid : 0,
                                         previd : turn.rowid,
@@ -510,7 +511,7 @@ async fn match_routine(tx : UnboundedSender<(String, Option<oneshot::Sender<(i8,
                                     db.set_over(turn.rowid);
                                 }
 
-                                
+
                                 //m.print();
                                 println!("{},{} = {}; pieces={}", row, col, evaluation, turn.pieces + 1);
                             },
@@ -527,10 +528,10 @@ async fn match_routine(tx : UnboundedSender<(String, Option<oneshot::Sender<(i8,
                     }
                 }
             }
-            
 
             if let Ok(elapsed) = last_store_time.elapsed() {
-                if elapsed.as_secs() > 60 { // store to file every X seconds
+                if elapsed.as_secs() > 60 {
+                    // store to file every X seconds
                     db.store();
                     last_store_time = SystemTime::now();
                 }
@@ -539,64 +540,55 @@ async fn match_routine(tx : UnboundedSender<(String, Option<oneshot::Sender<(i8,
         db.store();
         pieces += 1;
     }
-    
-
 }
 
-
-struct ReplyHanlder
-{
+struct ReplyHanlder {
     sender_deque: VecDeque<oneshot::Sender<(i8, i8, i32)>>,
-    evaluation : i32,
-    evaluation_regex : Regex,
-    position_regex : Regex,
+    evaluation: i32,
+    evaluation_regex: Regex,
+    position_regex: Regex,
 }
 
 impl ReplyHanlder {
     fn new() -> Self {
-        Self { 
-            sender_deque: VecDeque::new(), 
-            evaluation: 0, 
-            evaluation_regex : Regex::new(r"Evaluation\s*:\s*(?P<marks>\-?\d+)").unwrap(),
-            position_regex : Regex::new(r"^(?P<row>\-?\d{1,2}),(?P<col>\-?\d{1,2})$").unwrap(),
+        Self {
+            sender_deque: VecDeque::new(),
+            evaluation: 0,
+            evaluation_regex: Regex::new(r"Evaluation\s*:\s*(?P<marks>\-?\d+)").unwrap(),
+            position_regex: Regex::new(r"^(?P<row>\-?\d{1,2}),(?P<col>\-?\d{1,2})$").unwrap(),
         }
     }
 
-    fn add_replier(self : &mut Self, tx : oneshot::Sender<(i8, i8, i32)>) {
+    fn add_replier(self: &mut Self, tx: oneshot::Sender<(i8, i8, i32)>) {
         self.sender_deque.push_back(tx);
     }
 
     // https://github.com/accreator/Yixin-Board/blob/609c06015a0a239a3a5365c28ff8c7be96ecef9a/main.c#L4910
-    fn parse_result(self : &mut Self, line : String){
+    fn parse_result(self: &mut Self, line: String) {
         if line.starts_with("MESSAGE REALTIME ") {
             //println!("{}", line);
         } else if line.starts_with("MESSAGE ") {
             if line.starts_with("MESSAGE DETAIL ") {
-
-            }
-            else {
+            } else {
                 //println!("{}", line);
-                // MESSAGE Speed: 2400 | Evaluation: -94 
+                // MESSAGE Speed: 2400 | Evaluation: -94
                 for cap in self.evaluation_regex.captures_iter(&line) {
                     self.evaluation = cap["marks"].parse::<i32>().unwrap();
                 }
             }
-            
         } else {
             //println!("{}", line);
             for cap in self.position_regex.captures_iter(&line) {
                 let row = cap["row"].parse::<i8>().unwrap();
                 let col = cap["col"].parse::<i8>().unwrap();
                 if let Some(tx) = self.sender_deque.pop_front() {
-                    tx.send((row, col, self.evaluation)).expect("tx.send() failed");
+                    tx.send((row, col, self.evaluation))
+                        .expect("tx.send() failed");
                     self.evaluation = 0;
                 }
-                
             }
         }
-        
     }
 }
-
 
 //////////////////////////////////////////////////////////////////////////////////////////////////
