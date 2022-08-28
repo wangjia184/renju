@@ -17,19 +17,21 @@ use rayon::prelude::*;
 use tensorflow::Tensor;
 
 use std::collections::VecDeque;
-use std::fs;
+
 use std::process::Stdio;
 use std::time::SystemTime;
 
 mod game;
 mod mcts;
 mod storage;
-use game::{BoardMatrix, BoardMatrixExtension, RenjuBoard};
+mod train;
+use game::{BoardMatrix, BoardMatrixExtension, RenjuBoard, TerminalState};
 use mcts::TreeSearcher;
 use storage::{Database, Turn};
+use train::Trainer;
 
 mod model;
-use model::PolicyValueModel;
+use model::{PolicyValueModel, RenjuModel};
 
 static ABOUT_TEXT: &str = "Renju game ";
 
@@ -232,61 +234,10 @@ impl DataSet {
     }
 }
 
-fn get_best_model() -> PolicyValueModel {
-    let export_dir = "/Users/jerry/projects/renju/renju.git/game/renju_15x15_model/";
-
-    let ai_model = PolicyValueModel::load(export_dir).expect("Unable to load model");
-
-    let checkpoint_filename = "/Users/jerry/projects/renju/renju.git/game/saved.ckpt";
-    if fs::metadata(checkpoint_filename).is_ok() {
-        match ai_model.restore(checkpoint_filename) {
-            Err(e) => {
-                println!(
-                    "WARNING : Unable to restore checkpoint {}. {}",
-                    checkpoint_filename, e
-                );
-            }
-            _ => {
-                println!("Successfully loaded checkpoint {}", checkpoint_filename);
-            }
-        }
-    }
-
-    ai_model
-    /*
-    let mut ds = DataSet::new();
-
-    let records = ds.shuffle();
-
-    let mut count = 0;
-    for TrainInput(state_batch, mcts_probs, winner_batch) in records {
-        match ai_model.train(state_batch, mcts_probs, winner_batch) {
-            Err(e) => panic!("Error when trainning. {}", e),
-            Ok((loss, entropy)) => {
-                count += 1;
-                if count % 1000 == 0 {
-                    println!("{} : loss={}; entropy={}", count, loss, entropy);
-                }
-            }
-        };
-    }
-
-    ai_model.save(checkpoint_filename).expect("Unable to save");
-     */
-}
-
-#[tokio::main(flavor = "current_thread")] // use single-threaded runtime
+#[tokio::main(flavor = "multi_thread")]
 async fn main() {
-    let model = get_best_model();
-
-    let mut searcher = TreeSearcher::new(5f32, |state_batch| {
-        model.predict(&state_batch).expect("Failed to predict")
-    });
-
-    let board = RenjuBoard::default();
-    for _ in 0..1000000 {
-        searcher.rollout(board.clone());
-    }
+    let mut trainer = Trainer::new();
+    trainer.self_play();
 
     let args = Arguments::parse();
 
@@ -504,7 +455,7 @@ async fn match_routine(tx: UnboundedSender<(String, Option<oneshot::Sender<(i8, 
                                         answer : format!("{},{}", row, col),
                                         evaluation : evaluation,
                                         pieces : turn.pieces+1,
-                                        over : m.is_over(),
+                                        over : false, //m.is_over(),
                                     });
                                 }
                                 else {

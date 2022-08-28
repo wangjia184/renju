@@ -4,8 +4,8 @@ An implementation of the policyValueNet in Tensorflow V2
 Author : Jerry.Wang  vcer#qq.com
 """
 
-from tabnanny import verbose
 import tensorflow as tf
+import tensorflow_probability as tfp
 
 print( tf.__version__ )
 
@@ -156,6 +156,15 @@ def create_model(board_width, board_height):
             restored_tensors[var.name] = restored
             return checkpoint_path
 
+        @tf.function(input_signature=[tf.TensorSpec(shape=[None], dtype=tf.float32)])
+        def random_choose_with_dirichlet_noice(self, probs):
+            concentration = 0.3*tf.ones(tf.size(probs))
+            dist = tfp.distributions.Dirichlet(concentration)
+            p = 0.75*probs + 0.25*dist.sample(1)[0]
+            samples = tf.random.categorical(tf.math.log([p]), 1)
+            return samples[0] # selected index
+
+
     return RenjuModel()
 
 
@@ -168,4 +177,6 @@ model.model.save('renju_15x15_model',
             'predict': model.predict.get_concrete_function(), 
             'train' : model.train.get_concrete_function(), 
             'save' : model.save.get_concrete_function(),
-            'restore' : model.restore.get_concrete_function() })
+            'restore' : model.restore.get_concrete_function(),
+            'random_choose_with_dirichlet_noice' : model.random_choose_with_dirichlet_noice.get_concrete_function() 
+        })

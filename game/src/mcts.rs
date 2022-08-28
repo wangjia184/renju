@@ -1,3 +1,4 @@
+use crate::*;
 use core::cell::RefCell;
 use std::{
     collections::HashMap,
@@ -136,31 +137,30 @@ impl TreeNode {
 }
 
 // Monte Carlo tree search
-pub struct TreeSearcher<F>
+pub struct TreeSearcher<M>
 where
-    F: Fn(Tensor<f32>) -> (Tensor<f32>, f32),
+    M: RenjuModel,
 {
+    model: Rc<RefCell<M>>,
     c_puct: f32,
     root: Rc<RefCell<TreeNode>>,
-    predict_fn: F,
+    iterations: u32,
 }
 
-use tensorflow::Tensor;
-
-use crate::game::{RenjuBoard, TerminalState};
-impl<F> TreeSearcher<F>
+impl<M> TreeSearcher<M>
 where
-    F: Fn(Tensor<f32> /*(1,4,15,15)*/) -> (Tensor<f32> /*(1,15*15)*/, f32),
+    M: RenjuModel,
 {
-    pub fn new(c_puct: f32, predict_fn: F) -> Self {
+    pub fn new(c_puct: f32, iterations: u32, model: Rc<RefCell<M>>) -> Self {
         Self {
             c_puct: c_puct,
             root: TreeNode::new(1f32),
-            predict_fn: predict_fn,
+            model: model,
+            iterations: iterations,
         }
     }
 
-    pub fn rollout(self: &mut Self, mut board: RenjuBoard) {
+    fn rollout(self: &mut Self, mut board: RenjuBoard) {
         let mut node = self.root.clone();
         let mut state = TerminalState::default();
         while !state.is_over() {
@@ -175,7 +175,8 @@ where
             node = child;
         }
 
-        let mut leaf_value = 0f32;
+        // score for node
+        let evaluation_score: f32;
 
         match state {
             TerminalState::AvailableMoves(next_moves) => {
@@ -183,8 +184,17 @@ where
 
                 // Evaluate the leaf using a network
                 let state_tensor = board.get_state_tensor();
-                let (log_action_tensor, value) = (self.predict_fn)(state_tensor);
-                leaf_value = value;
+                let (log_action_tensor, score) = self
+                    .model
+                    .borrow()
+                    .predict(&state_tensor)
+                    .expect("Failed to predict");
+
+                // black and white are placed in turns
+                // if `node` is a black move, then `score` is an evaluation from white's perspective.
+                // Since this is a zero-sum game. Positive score means advantages for white, then disadvantages for black.
+                // That's why we need negative score because it is from opposite perspective.
+                evaluation_score = -score;
 
                 // extend children
                 for (row, col) in next_moves {
@@ -193,27 +203,98 @@ where
                 }
             }
             TerminalState::Draw => {
-                board.print();
-                leaf_value = 0f32;
+                evaluation_score = 0f32;
             }
             TerminalState::BlackWon => {
-                board.print();
                 if board.is_black_turn() {
-                    leaf_value = 1f32;
+                    // node is white move and lost
+                    evaluation_score = -1f32;
                 } else {
-                    leaf_value = -1f32;
+                    // node is black move and won
+                    evaluation_score = 1f32;
                 }
             }
             TerminalState::WhiteWon => {
-                board.print();
                 if board.is_black_turn() {
-                    leaf_value = -1f32;
+                    // node is white move and won
+                    evaluation_score = 1f32;
                 } else {
-                    leaf_value = 1f32;
+                    // node is black move and lost
+                    evaluation_score = -1f32;
                 }
             }
         };
 
-        node.borrow_mut().update_recursive(-leaf_value);
+        node.borrow_mut().update_recursive(evaluation_score);
+    }
+
+    // temperature parameter in (0, 1] controls the level of exploration
+    pub fn get_move_probability(
+        self: &mut Self,
+        board: &RenjuBoard,
+        temperature: f32,
+    ) -> Vec<((usize, usize) /*pos*/, f32 /* probability */)> {
+        for _ in 0..self.iterations {
+            self.rollout(board.clone());
+        }
+
+        let mut max_log_visit_times = 0f32;
+        // calc the move probabilities based on visit counts at the root node
+        let pairs: Vec<_> = self
+            .root
+            .borrow()
+            .children
+            .iter()
+            .map(|(pos, child)| {
+                let log_visit_times = 1f32 / temperature
+                    * (1e-10 /*avoid zero*/ + child.borrow().visit_times as f32).ln();
+                if log_visit_times > max_log_visit_times {
+                    max_log_visit_times = log_visit_times;
+                }
+                (*pos, log_visit_times)
+            })
+            .collect();
+
+        // softmax
+        let mut sum = 0f32;
+        let mut pairs: Vec<_> = pairs
+            .into_iter()
+            .map(|(pos, log_visit_times)| {
+                let prob = (log_visit_times - max_log_visit_times).exp();
+                sum += prob;
+                (pos, prob)
+            })
+            .collect();
+
+        pairs.iter_mut().for_each(|(_, prob)| {
+            *prob /= sum;
+        });
+
+        pairs
+    }
+
+    pub fn update_with_position(self: &mut Self, pos: (usize, usize)) {
+        let child = self
+            .root
+            .borrow_mut()
+            .children
+            .remove(&pos)
+            .expect("Child with specific position does not exist");
+        self.root.borrow_mut().children.clear(); // free all other children
+        if let Ok(cell) = Rc::try_unwrap(child) {
+            let mut node = cell.into_inner();
+            node.parent = None;
+            self.root.replace(node);
+            self.root.borrow_mut().current = Some(Rc::downgrade(&self.root));
+            self.root
+                .borrow_mut()
+                .children
+                .iter_mut()
+                .for_each(|(_, child)| {
+                    child.borrow_mut().parent = Some(Rc::downgrade(&self.root));
+                });
+        } else {
+            unreachable!("There must be only one strong reference to child node");
+        }
     }
 }

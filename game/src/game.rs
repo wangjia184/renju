@@ -1,7 +1,7 @@
 use nalgebra::SMatrix;
 use num_traits::identities::Zero;
 use std::cmp;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use tensorflow::Tensor;
 
@@ -13,10 +13,13 @@ pub type BoardMatrix = SMatrix<u8, SIZE, SIZE>;
 
 #[derive(Debug, Clone)]
 pub struct RenjuBoard {
-    matrix: BoardMatrix,               // 0=BLANK; 1=BLACK; 2=WHITE
-    available_matrix: BoardMatrix,     // available positions, 1=available
-    last_move: Option<(usize, usize)>, // recent move
-    pieces: usize,                     // number of moves
+    matrix: BoardMatrix,                      // 0=BLANK; 1=BLACK; 2=WHITE
+    available_matrix: BoardMatrix,            // available positions, 1=available
+    last_move: Option<(usize, usize)>,        // recent move
+    pieces: usize,                            // number of moves
+    black_win_moves: HashSet<(usize, usize)>, // just one black move in specified position to win
+    white_win_moves: HashSet<(usize, usize)>, // just one white move in specified position to win
+    forbidden_moves: HashSet<(usize, usize)>, // forbidden black moves
 }
 
 #[repr(u8)]
@@ -55,6 +58,9 @@ impl Default for RenjuBoard {
             available_matrix: available,
             last_move: None,
             pieces: 0,
+            black_win_moves: HashSet::new(),
+            white_win_moves: HashSet::new(),
+            forbidden_moves: HashSet::new(),
         }
     }
 }
@@ -84,7 +90,7 @@ impl TerminalState {
 
 impl RenjuBoard {
     pub fn print(self: &Self) {
-        self.matrix.print()
+        self.matrix.print();
     }
     pub fn width(self: &Self) -> usize {
         SIZE
@@ -117,25 +123,45 @@ impl RenjuBoard {
             Color::White
         };
 
+        let is_black_turn = self.is_black_turn();
+
         // update board pieces
-        let state = self.matrix.scan_continuous_pieces(pos, color);
+        let mut state = self.matrix.scan_continuous_pieces(pos, color);
+
+        // update status
+        self.matrix[pos] = if is_black_turn {
+            Color::Black.into()
+        } else {
+            Color::White.into()
+        };
+        self.last_move = Some(pos);
+        self.pieces += 1;
+
         if state.has_won() {
-            return if self.is_black_turn() {
+            return if is_black_turn {
                 TerminalState::BlackWon
             } else {
                 TerminalState::WhiteWon
             };
         }
-        if self.is_black_turn() {
-            // black piece move
-            if state.is_forbidden() {
-                return TerminalState::WhiteWon;
-            }
 
-            self.matrix[pos] = Color::Black.into();
-        } else {
-            // white piece move
-            self.matrix[pos] = Color::White.into();
+        if is_black_turn && state.is_forbidden() {
+            return TerminalState::WhiteWon;
+        }
+
+        // remove win positions if exists
+        self.black_win_moves.remove(&pos);
+        self.white_win_moves.remove(&pos);
+
+        // merge new win positions
+        while !state.black_win_moves.is_empty() {
+            self.black_win_moves.insert(state.black_win_moves.remove(0));
+        }
+        while !state.white_win_moves.is_empty() {
+            self.black_win_moves.insert(state.white_win_moves.remove(0));
+        }
+        while !state.forbidden_moves.is_empty() {
+            self.forbidden_moves.insert(state.forbidden_moves.remove(0));
         }
 
         // update available positions
@@ -163,37 +189,79 @@ impl RenjuBoard {
             }
         }
 
-        // update status
-        self.last_move = Some(pos);
-        self.pieces += 1;
-
         if self.pieces >= SIZE * SIZE {
             TerminalState::Draw
         } else {
-            if !state.next_moves.is_empty() && false {
-                TerminalState::AvailableMoves(state.next_moves)
+            // remove forbidden move. perhaps it was a win move but now it is forbidden
+            self.black_win_moves
+                .retain(|pos| !self.matrix.is_forbidden(*pos));
+            if self.is_black_turn() {
+                // next move is black, and there is at least one move to win
+                if !self.black_win_moves.is_empty() {
+                    return TerminalState::AvailableMoves(
+                        self.black_win_moves.clone().into_iter().collect(),
+                    );
+                }
+                // white is going to win, try to prevent lose
+                if !self.white_win_moves.is_empty() {
+                    return TerminalState::AvailableMoves(
+                        self.white_win_moves.clone().into_iter().collect(),
+                    );
+                }
+
+                // double check forbidden moves
+                self.forbidden_moves
+                    .retain(|pos| self.matrix.is_forbidden(*pos));
+
+                // exclude forbidden moves if there is any other available one
+                return TerminalState::AvailableMoves(self.get_available_moves(true));
             } else {
-                TerminalState::AvailableMoves(self.get_available_moves())
+                // next move is white, and there is at least one move to win
+                if !self.white_win_moves.is_empty() {
+                    return TerminalState::AvailableMoves(
+                        self.white_win_moves.clone().into_iter().collect(),
+                    );
+                }
+                // black is going to win, try to prevent lose
+                if !self.black_win_moves.is_empty() {
+                    return TerminalState::AvailableMoves(
+                        self.black_win_moves.clone().into_iter().collect(),
+                    );
+                }
+                return TerminalState::AvailableMoves(self.get_available_moves(false));
             }
         }
     }
 
     // return available moves
-    fn get_available_moves(self: &Self) -> Vec<(usize /*row*/, usize /*col*/)> {
+    fn get_available_moves(
+        self: &Self,
+        exclude_forbidden: bool,
+    ) -> Vec<(usize /*row*/, usize /*col*/)> {
         // first black
         if self.last_move.is_none() {
             return vec![(SIZE / 2, SIZE / 2)];
         }
 
         let mut positions = Vec::new();
+        let mut forbidden_moves = Vec::new();
         for row in 0..SIZE {
             for col in 0..SIZE {
                 if self.available_matrix[(row, col)] == AVAILABLE {
-                    positions.push((row, col));
+                    if exclude_forbidden && self.forbidden_moves.contains(&(row, col)) {
+                        forbidden_moves.push((row, col));
+                    } else {
+                        positions.push((row, col));
+                    }
                 }
             }
         }
-        positions
+
+        if positions.is_empty() {
+            forbidden_moves // if no other moves except forbidden one, then return
+        } else {
+            positions
+        }
     }
 
     pub fn get_state_tensor(self: &Self) -> Tensor<f32> {
@@ -210,11 +278,11 @@ impl RenjuBoard {
         let mut offset: usize = 0;
         for row in 0..SIZE {
             for col in 0..SIZE {
-                match self.matrix[(row, col)] {
-                    BLACK => {
+                match Color::try_from(self.matrix[(row, col)]).expect("Invalid board state") {
+                    Color::Black => {
                         state_tensor[black_base_index + offset] = 1f32;
                     }
-                    WHITE => {
+                    Color::White => {
                         state_tensor[white_base_index + offset] = 1f32;
                     }
                     _ => {}
@@ -245,7 +313,7 @@ pub trait BoardMatrixExtension {
     fn from_base81_string(text: &str) -> Self;
     fn to_base81_string(self: &Self) -> String;
     //fn for_each_piece<F: FnMut(usize, usize, u8)>(self: &Self, cb: F);
-    fn is_over(self: &Self) -> bool;
+    //fn is_over(self: &Self) -> bool;
     fn scan_continuous_pieces(self: &Self, position: (usize, usize), color: Color) -> NewMoveState;
     fn is_forbidden(self: &Self, position: (usize, usize)) -> bool;
     fn get_all_appearances(
@@ -283,7 +351,9 @@ pub struct NewMoveState {
     four_count: u8,  // open four
     has_five: bool,
     over_five: bool,
-    next_moves: Vec<(usize, usize)>, // opposite player has to choose one of them in next turn if non-empty
+    black_win_moves: Vec<(usize, usize)>, // white has to choose one of them in next turn if non-empty
+    white_win_moves: Vec<(usize, usize)>, // black has to choose one of them in next turn if non-empty
+    forbidden_moves: Vec<(usize, usize)>, // forbidden moves
 }
 
 impl NewMoveState {
@@ -294,12 +364,18 @@ impl NewMoveState {
             four_count: 0,
             has_five: false,
             over_five: false,
-            next_moves: Vec::new(),
+            black_win_moves: Vec::new(),
+            white_win_moves: Vec::new(),
+            forbidden_moves: Vec::new(),
         }
     }
 
-    pub fn get_next_moves(self: &Self) -> &Vec<(usize, usize)> {
-        &self.next_moves
+    pub fn get_black_win_moves(self: &Self) -> &Vec<(usize, usize)> {
+        &self.black_win_moves
+    }
+
+    pub fn get_white_win_moves(self: &Self) -> &Vec<(usize, usize)> {
+        &self.white_win_moves
     }
 
     #[allow(dead_code)]
@@ -510,11 +586,13 @@ impl BoardMatrixExtension for BoardMatrix {
                         cloned[pos] = Color::Black.into(); // suppose the specified position is black
                         if !cloned.is_forbidden(main_diretion[1][0]) {
                             four = true;
-                            state.next_moves.push(main_diretion[1][0]);
+                            state.black_win_moves.push(main_diretion[1][0]);
+                        } else {
+                            state.forbidden_moves.push(main_diretion[1][0]);
                         }
                     } else {
                         four = true;
-                        state.next_moves.push(main_diretion[1][0]);
+                        state.white_win_moves.push(main_diretion[1][0]);
                     }
                 }
 
@@ -526,11 +604,13 @@ impl BoardMatrixExtension for BoardMatrix {
                         cloned[pos] = Color::Black.into(); // suppose the specified position is black
                         if !cloned.is_forbidden(opposite_diretion[1][0]) {
                             four = true;
-                            state.next_moves.push(opposite_diretion[1][0]);
+                            state.black_win_moves.push(opposite_diretion[1][0]);
+                        } else {
+                            state.forbidden_moves.push(opposite_diretion[1][0]);
                         }
                     } else {
                         four = true;
-                        state.next_moves.push(opposite_diretion[1][0]);
+                        state.white_win_moves.push(opposite_diretion[1][0]);
                     }
                 }
 
@@ -549,11 +629,13 @@ impl BoardMatrixExtension for BoardMatrix {
                         cloned[pos] = Color::Black.into(); // suppose the specified position is black
                         if !cloned.is_forbidden(main_diretion[1][0]) {
                             state.four_count += 1;
-                            state.next_moves.push(main_diretion[1][0]);
+                            state.black_win_moves.push(main_diretion[1][0]);
+                        } else {
+                            state.forbidden_moves.push(main_diretion[1][0]);
                         }
                     } else {
                         state.four_count += 1;
-                        state.next_moves.push(main_diretion[1][0]);
+                        state.white_win_moves.push(main_diretion[1][0]);
                     }
                 }
 
@@ -565,11 +647,13 @@ impl BoardMatrixExtension for BoardMatrix {
                         cloned[pos] = Color::Black.into(); // suppose the specified position is black
                         if !cloned.is_forbidden(opposite_diretion[1][0]) {
                             state.four_count += 1;
-                            state.next_moves.push(opposite_diretion[1][0]);
+                            state.black_win_moves.push(opposite_diretion[1][0]);
+                        } else {
+                            state.forbidden_moves.push(opposite_diretion[1][0]);
                         }
                     } else {
                         state.four_count += 1;
-                        state.next_moves.push(opposite_diretion[1][0]);
+                        state.white_win_moves.push(opposite_diretion[1][0]);
                     }
                 }
 
@@ -586,10 +670,18 @@ impl BoardMatrixExtension for BoardMatrix {
 
                         // ┼┼●●●┼
                         // ^^   ^
-                        if !cloned.is_forbidden(main_diretion[1][0])
-                            && !cloned.is_forbidden(main_diretion[1][1])
-                            && !cloned.is_forbidden(opposite_diretion[1][0])
-                        {
+                        let mut is_forbidden = false;
+                        if cloned.is_forbidden(main_diretion[1][0]) {
+                            state.forbidden_moves.push(main_diretion[1][0]);
+                            is_forbidden = true;
+                        } else if cloned.is_forbidden(main_diretion[1][1]) {
+                            state.forbidden_moves.push(main_diretion[1][1]);
+                            is_forbidden = true;
+                        } else if cloned.is_forbidden(opposite_diretion[1][0]) {
+                            state.forbidden_moves.push(opposite_diretion[1][0]);
+                            is_forbidden = true;
+                        }
+                        if !is_forbidden {
                             live_three = true;
                         }
                     } else {
@@ -609,10 +701,18 @@ impl BoardMatrixExtension for BoardMatrix {
 
                         // ┼┼●●●┼
                         //  ^   ^
-                        if !cloned.is_forbidden(opposite_diretion[1][0])
-                            && !cloned.is_forbidden(opposite_diretion[1][1])
-                            && !cloned.is_forbidden(main_diretion[1][0])
-                        {
+                        let mut is_forbidden = false;
+                        if cloned.is_forbidden(opposite_diretion[1][0]) {
+                            state.forbidden_moves.push(opposite_diretion[1][0]);
+                            is_forbidden = true;
+                        } else if cloned.is_forbidden(opposite_diretion[1][1]) {
+                            state.forbidden_moves.push(opposite_diretion[1][1]);
+                            is_forbidden = true;
+                        } else if cloned.is_forbidden(main_diretion[1][0]) {
+                            state.forbidden_moves.push(main_diretion[1][0]);
+                            is_forbidden = true;
+                        }
+                        if !is_forbidden {
                             live_three = true;
                         }
                     } else {
@@ -634,11 +734,13 @@ impl BoardMatrixExtension for BoardMatrix {
                         cloned[pos] = Color::Black.into(); // suppose the specified position is black
                         if !cloned.is_forbidden(main_diretion[1][0]) {
                             state.four_count += 1;
-                            state.next_moves.push(main_diretion[1][0]);
+                            state.black_win_moves.push(main_diretion[1][0]);
+                        } else {
+                            state.forbidden_moves.push(main_diretion[1][0]);
                         }
                     } else {
                         state.four_count += 1;
-                        state.next_moves.push(main_diretion[1][0]);
+                        state.white_win_moves.push(main_diretion[1][0]);
                     }
                 }
 
@@ -649,11 +751,13 @@ impl BoardMatrixExtension for BoardMatrix {
                         cloned[pos] = Color::Black.into(); // suppose the specified position is black
                         if !cloned.is_forbidden(opposite_diretion[1][0]) {
                             state.four_count += 1;
-                            state.next_moves.push(opposite_diretion[1][0]);
+                            state.black_win_moves.push(opposite_diretion[1][0]);
+                        } else {
+                            state.forbidden_moves.push(opposite_diretion[1][0]);
                         }
                     } else {
                         state.four_count += 1;
-                        state.next_moves.push(opposite_diretion[1][0]);
+                        state.white_win_moves.push(opposite_diretion[1][0]);
                     }
                 }
 
@@ -681,6 +785,8 @@ impl BoardMatrixExtension for BoardMatrix {
                         //   ^
                         if !cloned.is_forbidden(main_diretion[1][0]) {
                             state.three_count += 1;
+                        } else {
+                            state.forbidden_moves.push(main_diretion[1][0]);
                         }
                     } else {
                         state.three_count += 1;
@@ -711,6 +817,8 @@ impl BoardMatrixExtension for BoardMatrix {
                         //    ^
                         if !cloned.is_forbidden(opposite_diretion[1][0]) {
                             state.three_count += 1;
+                        } else {
+                            state.forbidden_moves.push(opposite_diretion[1][0]);
                         }
                     } else {
                         state.three_count += 1;
@@ -730,11 +838,13 @@ impl BoardMatrixExtension for BoardMatrix {
                         //    ^
                         if !cloned.is_forbidden(main_diretion[1][0]) {
                             state.four_count += 1;
-                            state.next_moves.push(main_diretion[1][0]);
+                            state.black_win_moves.push(main_diretion[1][0]);
+                        } else {
+                            state.forbidden_moves.push(main_diretion[1][0]);
                         }
                     } else {
                         state.four_count += 1;
-                        state.next_moves.push(main_diretion[1][0]);
+                        state.white_win_moves.push(main_diretion[1][0]);
                     }
                 }
 
@@ -748,11 +858,13 @@ impl BoardMatrixExtension for BoardMatrix {
                         //    ^
                         if !cloned.is_forbidden(opposite_diretion[1][0]) {
                             state.four_count += 1;
-                            state.next_moves.push(opposite_diretion[1][0]);
+                            state.black_win_moves.push(opposite_diretion[1][0]);
+                        } else {
+                            state.forbidden_moves.push(opposite_diretion[1][0]);
                         }
                     } else {
                         state.four_count += 1;
-                        state.next_moves.push(opposite_diretion[1][0]);
+                        state.white_win_moves.push(opposite_diretion[1][0]);
                     }
                 }
 
@@ -772,6 +884,8 @@ impl BoardMatrixExtension for BoardMatrix {
                         //    ^
                         if !cloned.is_forbidden(main_diretion[1][0]) {
                             state.three_count += 1;
+                        } else {
+                            state.forbidden_moves.push(main_diretion[1][0]);
                         }
                     } else {
                         state.three_count += 1;
@@ -794,6 +908,8 @@ impl BoardMatrixExtension for BoardMatrix {
                         //    ^
                         if !cloned.is_forbidden(opposite_diretion[1][0]) {
                             state.three_count += 1;
+                        } else {
+                            state.forbidden_moves.push(opposite_diretion[1][0]);
                         }
                     } else {
                         state.three_count += 1;
@@ -808,7 +924,7 @@ impl BoardMatrixExtension for BoardMatrix {
             }
         }
     }
-
+    /*
     fn is_over(self: &Self) -> bool {
         let mut states = [[[[0u8; 4]; 2]; SIZE]; SIZE];
 
@@ -863,7 +979,7 @@ impl BoardMatrixExtension for BoardMatrix {
         }
 
         false
-    }
+    } */
 
     /*
        fn for_each_piece<F: FnMut(usize, usize, u8)>(self: &Self, mut cb: F) {

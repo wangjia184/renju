@@ -152,6 +152,41 @@ mod game_test {
     }
 
     #[test]
+    fn test_forbidden_check4() {
+        #[rustfmt::skip]
+        let mut board = BoardMatrix::from_row_slice(&[
+            0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 1, 1, 1, 2, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ]);
+
+        assert_eq!(board.is_forbidden((3, 5)), true);
+
+        board[(4, 6)] = 1;
+
+        assert_eq!(board.is_forbidden((3, 5)), false);
+
+        board[(5, 7)] = 1;
+
+        assert_eq!(board.is_forbidden((3, 5)), true);
+
+        board[(3, 4)] = 1;
+        assert_eq!(board.is_forbidden((3, 5)), false);
+    }
+
+    #[test]
     fn test_next_moves() {
         #[rustfmt::skip]
         let board = BoardMatrix::from_row_slice(&[
@@ -173,76 +208,23 @@ mod game_test {
         ]);
 
         let state = board.scan_continuous_pieces((0, 2), Color::White);
-        assert_eq!(state.get_next_moves().len(), 1);
-        assert_eq!(state.get_next_moves()[0], (0, 0));
+        assert_eq!(state.get_white_win_moves().len(), 1);
+        assert_eq!(state.get_white_win_moves()[0], (0, 0));
 
         let state = board.scan_continuous_pieces((1, 3), Color::Black);
-        assert_eq!(state.get_next_moves().len(), 2);
-        assert_eq!(state.get_next_moves()[0], (1, 0));
-        assert_eq!(state.get_next_moves()[1], (1, 5));
+        assert_eq!(state.get_black_win_moves().len(), 2);
+        assert_eq!(state.get_black_win_moves()[0], (1, 0));
+        assert_eq!(state.get_black_win_moves()[1], (1, 5));
 
         let state = board.scan_continuous_pieces((5, 6), Color::Black);
-        assert_eq!(state.get_next_moves().len(), 1);
-        assert_eq!(state.get_next_moves()[0], (4, 5));
+        assert_eq!(state.get_black_win_moves().len(), 1);
+        assert_eq!(state.get_black_win_moves()[0], (4, 5));
 
         assert_eq!(board.is_forbidden((4, 1)), true);
         let state = board.scan_continuous_pieces((4, 1), Color::Black);
-        assert_eq!(state.get_next_moves().len(), 3);
-        assert_eq!(state.get_next_moves()[0], (2, 1));
-        assert_eq!(state.get_next_moves()[1], (6, 1));
-        assert_eq!(state.get_next_moves()[2], (3, 2));
-    }
-
-    #[test]
-    fn test_is_over() {
-        let mut m = BoardMatrix::zeros();
-        m[(6, 6)] = 1;
-        m[(7, 7)] = 1;
-        m[(8, 8)] = 1;
-        m[(9, 9)] = 1;
-        m[(10, 10)] = 2;
-        m[(11, 11)] = 1;
-        m[(12, 12)] = 1;
-        m[(13, 13)] = 1;
-        m[(14, 14)] = 1;
-
-        assert_eq!(m.is_over(), false);
-        m[(9, 9)] = 2;
-        m[(10, 10)] = 1;
-        assert_eq!(m.is_over(), true);
-
-        let mut m = BoardMatrix::zeros();
-        m[(0, 0)] = 2;
-        m[(0, 1)] = 2;
-        m[(0, 2)] = 2;
-        m[(0, 4)] = 2;
-        assert_eq!(m.is_over(), false);
-        m[(0, 3)] = 2;
-        assert_eq!(m.is_over(), true);
-
-        let mut m = BoardMatrix::zeros();
-        m[(0, 14)] = 1;
-        m[(0, 13)] = 1;
-        m[(0, 12)] = 1;
-        m[(0, 11)] = 1;
-        assert_eq!(m.is_over(), false);
-        m[(0, 10)] = 1;
-        assert_eq!(m.is_over(), true);
-
-        let mut m = BoardMatrix::zeros();
-        m[(0, 14)] = 1;
-        m[(1, 14)] = 1;
-        m[(2, 14)] = 1;
-        m[(3, 14)] = 1;
-        m[(4, 14)] = 2;
-        assert_eq!(m.is_over(), false);
-        m[(4, 14)] = 1;
-        assert_eq!(m.is_over(), true);
-
-        let m = BoardMatrix::from_base81_string(
-            "0000000000000i0003r00R200p904QS08?017N01J2020001000000000",
-        );
-        m.print();
-        assert_eq!(m.is_over(), false);
+        assert_eq!(state.get_black_win_moves().len(), 3);
+        assert_eq!(state.get_black_win_moves()[0], (2, 1));
+        assert_eq!(state.get_black_win_moves()[1], (6, 1));
+        assert_eq!(state.get_black_win_moves()[2], (3, 2));
     }
 }

@@ -33,6 +33,10 @@ pub fn load_plugable_device(library_filename: &str) -> Result<(), Status> {
     }
 }
 
+pub trait RenjuModel {
+    fn predict(self: &Self, state_batch: &Tensor<f32>) -> Result<(Tensor<f32>, f32), Status>;
+}
+
 pub struct PolicyValueModel {
     graph: Graph,
     bundle: SavedModelBundle,
@@ -46,6 +50,8 @@ pub struct PolicyValueModel {
     export_output: Operation,
     restore_input: Operation,
     restore_output: Operation,
+    random_choose_with_dirichlet_noice_input: Operation,
+    random_choose_with_dirichlet_noice_output: Operation,
 }
 
 impl PolicyValueModel {
@@ -147,6 +153,26 @@ impl PolicyValueModel {
             .operation_by_name_required(&outputs_info.name().name)
             .expect("Unable to find `output_0` in concreate function `restore`");
 
+        // random_choose_with_dirichlet_noice
+        let choice_signature = bundle
+            .meta_graph_def()
+            .get_signature("random_choose_with_dirichlet_noice")
+            .expect("Unable to find concreate function `random_choose_with_dirichlet_noice`");
+        let inputs_info = choice_signature.get_input("probs").expect(
+            "Unable to find `probs` in concreate function `random_choose_with_dirichlet_noice`",
+        );
+        let outputs_info = choice_signature.get_output("output_0").expect(
+            "Unable to find `output_0` in concreate function `random_choose_with_dirichlet_noice`",
+        );
+        let random_choose_with_dirichlet_noice_input_op = graph
+            .operation_by_name_required(&inputs_info.name().name)
+            .expect("Unable to find `probs` op in concreate function `random_choose_with_dirichlet_noice`");
+        let random_choose_with_dirichlet_noice_output_op = graph
+            .operation_by_name_required(&outputs_info.name().name)
+            .expect(
+            "Unable to find `output_0` in concreate function `random_choose_with_dirichlet_noice`",
+        );
+
         Ok(Self {
             graph: graph,
             bundle: bundle,
@@ -160,6 +186,8 @@ impl PolicyValueModel {
             export_output: export_output_op,
             restore_input: restore_input_op,
             restore_output: restore_output_op,
+            random_choose_with_dirichlet_noice_input: random_choose_with_dirichlet_noice_input_op,
+            random_choose_with_dirichlet_noice_output: random_choose_with_dirichlet_noice_output_op,
         })
     }
 
@@ -190,25 +218,6 @@ impl PolicyValueModel {
         Ok((loss[0], entropy[0]))
     }
 
-    pub fn predict(self: &Self, state_batch: &Tensor<f32>) -> Result<(Tensor<f32>, f32), Status> {
-        let mut prediction = SessionRunArgs::new();
-        prediction.add_feed(&self.predict_input, 0, &state_batch);
-        prediction.add_target(&self.predict_output);
-        let log_action_token = prediction.request_fetch(&self.predict_output, 0);
-        let value_token = prediction.request_fetch(&self.predict_output, 1);
-        self.bundle.session.run(&mut prediction)?;
-
-        // Check our results.
-        let log_action: Tensor<f32> = prediction
-            .fetch(log_action_token)
-            .expect("Unable to retrieve action result");
-        let value: Tensor<f32> = prediction
-            .fetch(value_token)
-            .expect("Unable to retrieve log result");
-
-        Ok((log_action, value[0]))
-    }
-
     pub fn save(self: &Self, filename: &str) -> Result<(), Status> {
         let file_path_tensor: Tensor<String> = Tensor::from(String::from(filename));
 
@@ -227,5 +236,59 @@ impl PolicyValueModel {
         step.add_feed(&self.restore_input, 0, &file_path_tensor);
         step.add_target(&self.restore_output);
         self.bundle.session.run(&mut step)
+    }
+
+    pub fn random_choose_with_dirichlet_noice(
+        self: &Self,
+        probabilities: &Tensor<f32>,
+    ) -> Result<usize, Status> {
+        let shape = probabilities.shape();
+        assert_eq!(shape.dims(), Some(1));
+
+        let mut step = SessionRunArgs::new();
+        step.add_feed(
+            &self.random_choose_with_dirichlet_noice_input,
+            0,
+            &probabilities,
+        );
+        step.add_target(&self.random_choose_with_dirichlet_noice_output);
+        let selected_index_token =
+            step.request_fetch(&self.random_choose_with_dirichlet_noice_output, 0);
+        self.bundle.session.run(&mut step)?;
+
+        let tensor: Tensor<i64> = step
+            .fetch(selected_index_token)
+            .expect("Unable to retrieve selected result");
+        let index = tensor[0];
+        if index >= 0 && index < shape[0].unwrap() {
+            return Ok(index as usize);
+        }
+        unreachable!("Index must be in the range of probabilities")
+    }
+}
+
+impl RenjuModel for PolicyValueModel {
+    fn predict(self: &Self, state_batch: &Tensor<f32>) -> Result<(Tensor<f32>, f32), Status> {
+        let shape = state_batch.shape();
+        assert_eq!(shape.dims(), Some(4));
+        assert_eq!(shape[1], Some(4));
+        assert_eq!(shape[2], Some(15));
+        assert_eq!(shape[3], Some(15));
+        let mut prediction = SessionRunArgs::new();
+        prediction.add_feed(&self.predict_input, 0, &state_batch);
+        prediction.add_target(&self.predict_output);
+        let log_action_token = prediction.request_fetch(&self.predict_output, 0);
+        let value_token = prediction.request_fetch(&self.predict_output, 1);
+        self.bundle.session.run(&mut prediction)?;
+
+        // Check our results.
+        let log_action: Tensor<f32> = prediction
+            .fetch(log_action_token)
+            .expect("Unable to retrieve action result");
+        let value: Tensor<f32> = prediction
+            .fetch(value_token)
+            .expect("Unable to retrieve log result");
+
+        Ok((log_action, value[0]))
     }
 }
