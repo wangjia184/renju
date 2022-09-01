@@ -35,6 +35,13 @@ pub fn load_plugable_device(library_filename: &str) -> Result<(), Status> {
 
 pub trait RenjuModel {
     fn predict(self: &Self, state_batch: &Tensor<f32>) -> Result<(Tensor<f32>, f32), Status>;
+
+    fn train(
+        self: &Self,
+        state_batch: &Tensor<f32>,
+        mcts_probs: &Tensor<f32>,
+        winner_batch: &Tensor<f32>,
+    ) -> Result<(f32 /*loss*/, f32 /*entropy*/), Status>;
 }
 
 pub struct PolicyValueModel {
@@ -191,33 +198,6 @@ impl PolicyValueModel {
         })
     }
 
-    pub fn train(
-        self: &Self,
-        state_batch: &Tensor<f32>,
-        mcts_probs: &Tensor<f32>,
-        winner_batch: &Tensor<f32>,
-    ) -> Result<(f32 /*loss*/, f32 /*entropy*/), Status> {
-        let mut train_step = SessionRunArgs::new();
-        train_step.add_feed(&self.train_input_state_batch, 0, &state_batch);
-        train_step.add_feed(&self.train_input_mcts_probs, 0, &mcts_probs);
-        train_step.add_feed(&self.train_input_winner_batch, 0, &winner_batch);
-        train_step.add_target(&self.train_output);
-
-        let loss_token = train_step.request_fetch(&self.train_output, 0);
-        let entropy_token = train_step.request_fetch(&self.train_output, 1);
-        self.bundle.session.run(&mut train_step)?;
-
-        // Check our results.
-        let loss: Tensor<f32> = train_step
-            .fetch(loss_token)
-            .expect("Unable to retrieve loss result");
-        let entropy: Tensor<f32> = train_step
-            .fetch(entropy_token)
-            .expect("Unable to retrieve entropy result");
-
-        Ok((loss[0], entropy[0]))
-    }
-
     pub fn save(self: &Self, filename: &str) -> Result<(), Status> {
         let file_path_tensor: Tensor<String> = Tensor::from(String::from(filename));
 
@@ -290,5 +270,32 @@ impl RenjuModel for PolicyValueModel {
             .expect("Unable to retrieve log result");
 
         Ok((log_action, value[0]))
+    }
+
+    fn train(
+        self: &Self,
+        state_batch: &Tensor<f32>,
+        mcts_probs: &Tensor<f32>,
+        winner_batch: &Tensor<f32>,
+    ) -> Result<(f32 /*loss*/, f32 /*entropy*/), Status> {
+        let mut train_step = SessionRunArgs::new();
+        train_step.add_feed(&self.train_input_state_batch, 0, &state_batch);
+        train_step.add_feed(&self.train_input_mcts_probs, 0, &mcts_probs);
+        train_step.add_feed(&self.train_input_winner_batch, 0, &winner_batch);
+        train_step.add_target(&self.train_output);
+
+        let loss_token = train_step.request_fetch(&self.train_output, 0);
+        let entropy_token = train_step.request_fetch(&self.train_output, 1);
+        self.bundle.session.run(&mut train_step)?;
+
+        // Check our results.
+        let loss: Tensor<f32> = train_step
+            .fetch(loss_token)
+            .expect("Unable to retrieve loss result");
+        let entropy: Tensor<f32> = train_step
+            .fetch(entropy_token)
+            .expect("Unable to retrieve entropy result");
+
+        Ok((loss[0], entropy[0]))
     }
 }

@@ -5,13 +5,36 @@ edition = "2021"
 
 [dependencies]
 clap = { version = "3.1.18", features = ["derive"] }
-tokio = { version = "1.18.2", features = ["process", "sync", "macros", "io-util", "rt-multi-thread", "fs", "time"] } #https://docs.rs/tokio/1.18.2/tokio/index.html#feature-flags
-tokio-util = { version = "0.7.2", features = ["io" ] }
-nalgebra = "0.31.0"
-num-traits = "0.2.15"
+tokio = { version = "1.18.2", features = [
+    "process",
+    "sync",
+    "macros",
+    "io-util",
+    "rt-multi-thread",
+    "fs",
+    "time",
+] } #https://docs.rs/tokio/1.18.2/tokio/index.html#feature-flags
+tokio-util = { version = "0.7.2", features = ["io"] }
+
+bytemuck = "1.12.1"
 regex = "1.6.0"
 tensorflow = { path = "./tensorflow/rust" }
-tensorflow-sys = { path = "./tensorflow/rust/tensorflow-sys", features=["runtime_linking"] }
+tensorflow-sys = { path = "./tensorflow/rust/tensorflow-sys", features = [
+    "runtime_linking",
+] }
+
+
+ndarray = { version = "0.15.6", features = ["blas"] }
+blas-src = { version = "0.8.0", default-features = false, features = [
+    "accelerate",
+] }
+# BLAS source choices:
+# accelerate, which is the one in the Accelerate framework (macOS only),
+# blis, which is the one in BLIS,
+# intel-mkl, which is the one in Intel MKL,
+# netlib, which is the reference one by Netlib, and
+# openblas, which is the one in OpenBLAS.
+
 rayon = "1.5.3"
 rand = "0.8.5"
 # `bundled` causes us to automatically compile and link in an up to date
@@ -26,7 +49,6 @@ rand = "0.8.5"
 rusqlite = { version = "0.28.0", features = ["bundled", "backup"] }
 
 
-
 [dependencies.uuid]
 version = "1.1.2"
 features = [
@@ -36,12 +58,8 @@ features = [
 ]
 
 
-
 [profile.release]
-strip = true  # Automatically strip symbols from the binary.
-opt-level = "z"  # Optimize for size.
+strip = true      # Automatically strip symbols from the binary.
+opt-level = "z"   # Optimize for size.
 lto = true
 codegen-units = 1
-
-
-

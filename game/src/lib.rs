@@ -6,7 +6,7 @@ pub mod model;
 
 pub mod train;
 
-pub use game::{RenjuBoard, TerminalState};
+pub use game::{RenjuBoard, SquaredMatrix, SquaredMatrixExtension, StateTensor, TerminalState};
 pub use mcts::{TreeNode, TreeSearcher};
 pub use model::{PolicyValueModel, RenjuModel};
 pub use tensorflow::Tensor;

@@ -6,6 +6,12 @@
     "configurations": [
         {
             "type": "lldb",
+            "request": "attach",
+            "pid": "${command:pickProcess}",
+            "name": "Debug a running process",
+        },
+        {
+            "type": "lldb",
             "request": "launch",
             "name": "Debug unit tests in library 'renju_game'",
             "cargo": {

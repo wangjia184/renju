@@ -1,4 +1,5 @@
 use crate::*;
+use bytemuck::cast_slice;
 use core::cell::RefCell;
 use std::{
     collections::HashMap,
@@ -7,6 +8,7 @@ use std::{
 
 #[allow(dead_code)]
 pub struct TreeNode {
+    action: Option<(usize, usize)>,
     parent: Option<Weak<RefCell<TreeNode>>>, // None if this is a root node
     children: HashMap<(usize /*row*/, usize /*col*/), Rc<RefCell<TreeNode>>>,
     current: Option<Weak<RefCell<TreeNode>>>,
@@ -26,7 +28,24 @@ pub struct TreeNode {
 #[allow(dead_code)]
 impl TreeNode {
     pub fn new(probability: f32) -> Rc<RefCell<TreeNode>> {
-        let mut node = TreeNode {
+        let node = TreeNode {
+            action: None,
+            parent: None,
+            children: HashMap::new(),
+            current: None,
+            visit_times: 0,
+            probability: probability,
+            q: 0f32,
+            //u: 0f32,
+        };
+        let instance = Rc::new(RefCell::new(node));
+        instance.borrow_mut().current = Some(Rc::downgrade(&instance));
+        instance
+    }
+
+    pub fn new_child(pos: (usize, usize), probability: f32) -> Rc<RefCell<TreeNode>> {
+        let node = TreeNode {
+            action: Some(pos),
             parent: None,
             children: HashMap::new(),
             current: None,
@@ -46,7 +65,7 @@ impl TreeNode {
         pos: (usize, usize),
         probability: f32,
     ) -> Rc<RefCell<TreeNode>> {
-        let instance = TreeNode::new(probability);
+        let instance = TreeNode::new_child(pos, probability);
         self.append_child(pos, instance.clone());
         instance
     }
@@ -67,6 +86,14 @@ impl TreeNode {
     // Determine if this is root node
     pub fn is_root(self: &TreeNode) -> bool {
         self.parent.is_none()
+    }
+
+    pub fn get_parent(self: &Self) -> Option<Rc<RefCell<TreeNode>>> {
+        if let Some(parent) = &self.parent {
+            parent.upgrade()
+        } else {
+            None
+        }
     }
 
     // Update node values from leaf evaluation.
@@ -160,30 +187,47 @@ where
         }
     }
 
-    fn rollout(self: &mut Self, mut board: RenjuBoard) {
+    fn rollout(self: &mut Self, mut board: RenjuBoard, prev_state: &TerminalState) {
         let mut node = self.root.clone();
-        let mut state = TerminalState::default();
-        while !state.is_over() {
-            // Greedily select next move.
-            let child = match node.borrow().select(self.c_puct) {
-                None => break, // leaf
-                Some((pos, c)) => {
-                    state = board.do_move(pos);
-                    c
+        assert_eq!(board.get_last_move(), node.borrow().action);
+
+        let mut state: Option<TerminalState> = None;
+        if !node.borrow().children.is_empty() {
+            loop {
+                // Greedily select next move.
+                let child = match node.borrow().select(self.c_puct) {
+                    None => {
+                        break;
+                    } // leaf
+                    Some((pos, c)) => {
+                        state = Some(board.do_move(pos));
+                        c
+                    }
+                };
+                node = child;
+                if state.as_ref().unwrap().is_over() {
+                    break;
                 }
-            };
-            node = child;
+            }
+        } else {
+            // no children, never explored this branch. hence we need use the available moves from outside
+            state = Some(prev_state.clone());
         }
 
         // score for node
         let evaluation_score: f32;
 
-        match state {
+        assert!(state.is_some());
+
+        match state.unwrap() {
             TerminalState::AvailableMoves(next_moves) => {
                 assert!(!next_moves.is_empty());
 
                 // Evaluate the leaf using a network
-                let state_tensor = board.get_state_tensor();
+                let mut state_tensor =
+                    Tensor::<f32>::new(&[1, 4, board.width() as u64, board.height() as u64]);
+
+                state_tensor.copy_from_slice(cast_slice(&board.get_state_tensor()));
                 let (log_action_tensor, score) = self
                     .model
                     .borrow()
@@ -232,10 +276,11 @@ where
     pub fn get_move_probability(
         self: &mut Self,
         board: &RenjuBoard,
+        prev_state: TerminalState,
         temperature: f32,
     ) -> Vec<((usize, usize) /*pos*/, f32 /* probability */)> {
         for _ in 0..self.iterations {
-            self.rollout(board.clone());
+            self.rollout(board.clone(), &prev_state);
         }
 
         let mut max_log_visit_times = 0f32;
@@ -273,7 +318,7 @@ where
         pairs
     }
 
-    pub fn update_with_position(self: &mut Self, pos: (usize, usize)) {
+    pub fn update_with_position(self: &mut Self, pos: (usize, usize)) -> usize {
         let child = self
             .root
             .borrow_mut()
@@ -296,5 +341,7 @@ where
         } else {
             unreachable!("There must be only one strong reference to child node");
         }
+
+        self.root.borrow().children.len()
     }
 }
