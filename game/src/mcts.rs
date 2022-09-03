@@ -25,7 +25,6 @@ pub struct TreeNode {
     q: f32, // the exploitation part of the equation. average of evaluations of all leaves
 }
 
-#[allow(dead_code)]
 impl TreeNode {
     pub fn new(probability: f32) -> Rc<RefCell<TreeNode>> {
         let node = TreeNode {
@@ -78,22 +77,16 @@ impl TreeNode {
         self.children.insert(pos, child);
     }
 
+    #[allow(dead_code)]
     // Determine if this is a leaf node
     pub fn is_leaf(self: &TreeNode) -> bool {
         self.children.len() == 0
     }
 
+    #[allow(dead_code)]
     // Determine if this is root node
     pub fn is_root(self: &TreeNode) -> bool {
         self.parent.is_none()
-    }
-
-    pub fn get_parent(self: &Self) -> Option<Rc<RefCell<TreeNode>>> {
-        if let Some(parent) = &self.parent {
-            parent.upgrade()
-        } else {
-            None
-        }
     }
 
     // Update node values from leaf evaluation.
@@ -124,7 +117,7 @@ impl TreeNode {
     // Calculate and return the value for this node.
     // It is a combination of leaf evaluations Q, and this node's prior adjusted for its visit count, u.
     // c_puct: a number in (0, inf) controlling the relative impact of value Q, and prior probability P, on this node's score.
-    fn compute_score(self: &Self, c_puct: f32) -> f32 {
+    pub fn compute_score(self: &Self, c_puct: f32) -> f32 {
         // The second half of the equation adds exploration,
         // with the degree of exploration being controlled by the hyper-parameter ‘c’.
         // Effectively this part of the equation provides a measure of the uncertainty for the action’s reward estimate.
@@ -164,7 +157,7 @@ impl TreeNode {
 }
 
 // Monte Carlo tree search
-pub struct TreeSearcher<M>
+pub struct MonteCarloTree<M>
 where
     M: RenjuModel,
 {
@@ -174,7 +167,7 @@ where
     iterations: u32,
 }
 
-impl<M> TreeSearcher<M>
+impl<M> MonteCarloTree<M>
 where
     M: RenjuModel,
 {
@@ -187,7 +180,7 @@ where
         }
     }
 
-    fn rollout(self: &mut Self, mut board: RenjuBoard, prev_state: &TerminalState) {
+    fn rollout(self: &mut Self, mut board: RenjuBoard, choices: &Vec<(usize, usize)>) {
         let mut node = self.root.clone();
         assert_eq!(board.get_last_move(), node.borrow().action);
 
@@ -211,7 +204,7 @@ where
             }
         } else {
             // no children, never explored this branch. hence we need use the available moves from outside
-            state = Some(prev_state.clone());
+            state = Some(TerminalState::AvailableMoves(choices.clone()));
         }
 
         // score for node
@@ -220,14 +213,15 @@ where
         assert!(state.is_some());
 
         match state.unwrap() {
-            TerminalState::AvailableMoves(next_moves) => {
-                assert!(!next_moves.is_empty());
+            TerminalState::AvailableMoves(choices) => {
+                assert!(!choices.is_empty());
 
                 // Evaluate the leaf using a network
                 let mut state_tensor =
                     Tensor::<f32>::new(&[1, 4, board.width() as u64, board.height() as u64]);
 
                 state_tensor.copy_from_slice(cast_slice(&board.get_state_tensor()));
+
                 let (log_action_tensor, score) = self
                     .model
                     .borrow()
@@ -241,7 +235,7 @@ where
                 evaluation_score = -score;
 
                 // extend children
-                for (row, col) in next_moves {
+                for (row, col) in choices {
                     let probability = log_action_tensor[row * board.width() + col].exp();
                     node.borrow_mut().create_child((row, col), probability);
                 }
@@ -276,11 +270,11 @@ where
     pub fn get_move_probability(
         self: &mut Self,
         board: &RenjuBoard,
-        prev_state: TerminalState,
+        choices: &Vec<(usize, usize)>,
         temperature: f32,
     ) -> Vec<((usize, usize) /*pos*/, f32 /* probability */)> {
         for _ in 0..self.iterations {
-            self.rollout(board.clone(), &prev_state);
+            self.rollout(board.clone(), choices);
         }
 
         let mut max_log_visit_times = 0f32;
@@ -343,5 +337,50 @@ where
         }
 
         self.root.borrow().children.len()
+    }
+}
+
+// for integration test only
+#[cfg(test)]
+#[allow(dead_code)]
+impl TreeNode {
+    pub fn get_visit_times(self: &Self) -> u32 {
+        self.visit_times
+    }
+    pub fn get_probability(self: &Self) -> f32 {
+        self.probability
+    }
+    pub fn get_parent(self: &Self) -> Option<Rc<RefCell<TreeNode>>> {
+        if let Some(ref parent) = self.parent {
+            return parent.upgrade();
+        }
+        None
+    }
+
+    pub fn get_children(
+        self: &Self,
+    ) -> HashMap<(usize /*row*/, usize /*col*/), Rc<RefCell<TreeNode>>> {
+        self.children.clone()
+    }
+
+    pub fn get_current(self: &Self) -> Rc<RefCell<TreeNode>> {
+        if let Some(ref current) = self.current {
+            if let Some(current) = current.upgrade() {
+                return current;
+            }
+        }
+        unreachable!("Current node must exists");
+    }
+}
+
+// for integration test only
+#[cfg(test)]
+#[allow(dead_code)]
+impl<M> MonteCarloTree<M>
+where
+    M: RenjuModel,
+{
+    pub fn get_root(self: &Self) -> Rc<RefCell<TreeNode>> {
+        self.root.clone()
     }
 }

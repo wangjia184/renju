@@ -7,12 +7,13 @@ use tensorflow::Tensor;
 
 mod game;
 mod mcts;
+mod player;
 mod storage;
 mod train;
 use game::{RenjuBoard, SquaredMatrix, SquaredMatrixExtension, StateTensor, TerminalState};
-use mcts::TreeSearcher;
+use mcts::MonteCarloTree;
+use player::{Match, SelfPlayer};
 use train::Trainer;
-
 mod model;
 use model::{PolicyValueModel, RenjuModel};
 
