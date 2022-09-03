@@ -409,6 +409,10 @@ impl RenjuBoard {
         }
     }
 
+    pub fn is_forbidden(self: &mut Self, position: (usize, usize)) -> bool {
+        self.is_black_turn() && self.matrix.is_forbidden(position)
+    }
+
     // return available moves
     fn get_available_moves(self: &Self) -> Vec<(usize /*row*/, usize /*col*/)> {
         // first black

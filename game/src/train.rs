@@ -1,5 +1,8 @@
 use crate::*;
 use bytemuck::cast_slice;
+use ndarray::prelude::*;
+use ndarray::Array;
+use std::borrow::Cow;
 use std::{cell::RefCell, fs, rc::Rc};
 
 pub struct SelfPlayerOutcome(
@@ -19,6 +22,10 @@ pub struct Trainer {
     temperature: f32,
     model: Rc<RefCell<PolicyValueModel>>,
     data_buffer: Vec<TrainDataItem>,
+    epochs: usize, // num of train_steps for each update
+    kl_targ: f32,
+    learn_rate: f32,
+    lr_multiplier: f32, // adaptively adjust the learning rate based on KL
 }
 
 const BATCH_SIZE: usize = 500;
@@ -31,10 +38,16 @@ impl Trainer {
             temperature: 1e-3,
             model: m,
             data_buffer: Vec::with_capacity(1000),
+            epochs: 5,
+            learn_rate: 2e-3,
+            lr_multiplier: 1f32,
+            kl_targ: 0.02f32,
         }
     }
 
     pub fn execute(self: &mut Self) {
+        fs::create_dir_all("checkpoints").expect("Unable to create directory");
+        let mut round = 0;
         loop {
             self.collect_data();
 
@@ -77,13 +90,71 @@ impl Trainer {
                     .with_values(cast_slice(&winner_batch))
                     .expect("Unable to create winner batch tensor");
 
-                let (loss, entropy) = self
+                let (old_log_probs, old_value) = self
                     .model
                     .borrow()
-                    .train(&tensor1, &tensor2, &tensor3)
-                    .expect("Failed to train");
+                    .predict(&tensor1)
+                    .expect("Failed to predict");
 
-                println!("loss={}; entropy={}", loss, entropy);
+                let old_log_probs = Array::from(old_log_probs);
+                let old_probs = old_log_probs.mapv(f32::exp);
+
+                let mut kl: f32 = 0f32;
+                let mut loss: f32 = 0f32;
+                let mut entropy: f32 = 0f32;
+                for _ in 0..self.epochs {
+                    (loss, entropy) = self
+                        .model
+                        .borrow()
+                        .train(
+                            &tensor1,
+                            &tensor2,
+                            &tensor3,
+                            self.learn_rate * self.lr_multiplier,
+                        )
+                        .expect("Failed to train");
+
+                    let (new_log_probs, new_value) = self
+                        .model
+                        .borrow()
+                        .predict(&tensor1)
+                        .expect("Failed to predict");
+
+                    let new_log_probs = Array::from(new_log_probs);
+
+                    // https://docs.rs/ndarray/latest/ndarray/doc/ndarray_for_numpy_users/index.html
+                    // kl = np.mean(np.sum(old_probs * (old_log_probs - new_log_probs), axis=1))
+                    let x = &old_probs * (&old_log_probs - new_log_probs);
+                    kl = x.index_axis(Axis(0), 0).sum_axis(Axis(1)).mean().unwrap();
+                    //kl = x.sum_axis(Axis(2)).mean().unwrap();
+
+                    if kl > self.kl_targ * 4f32 {
+                        break; // stopping early if D_KL diverges badly
+                    }
+                }
+
+                println!(
+                    "lr={}; loss={}; entropy={}; kl={}",
+                    self.learn_rate * self.lr_multiplier,
+                    loss,
+                    entropy,
+                    kl
+                );
+
+                // adaptively adjust the learning rate
+                if kl > self.kl_targ * 2f32 && self.lr_multiplier > 0.1f32 {
+                    self.lr_multiplier /= 1.5f32;
+                } else if kl < self.kl_targ / 2f32 && self.lr_multiplier < 10f32 {
+                    self.lr_multiplier *= 1.5f32;
+                }
+
+                let filename = format!("checkpoints/{}.ckpt", round);
+                round += 1;
+
+                self.model
+                    .borrow()
+                    .save(&filename)
+                    .expect("Unable to save checkpoint");
             }
         }
     }
@@ -106,8 +177,6 @@ impl Trainer {
                     mcts_probs_matrix[*row][*col] = *probability;
                 });
 
-            //board.print();
-
             let state_tensor = board.get_state_tensor();
 
             get_equivalents(&state_tensor, &mcts_probs_matrix)
@@ -124,6 +193,39 @@ impl Trainer {
         }
     }
 
+    fn pick_move(
+        self: &Self,
+        board: &mut RenjuBoard,
+        move_prob_pairs: &Vec<((usize, usize), f32)>,
+    ) -> (usize, usize) {
+        assert!(!move_prob_pairs.is_empty());
+
+        let mut pairs = Cow::from(move_prob_pairs);
+        while !pairs.is_empty() {
+            // determine the position to move
+            // For self-player, choose a position by probabilities with dirichlet noice
+            let mut probability_tensor = Tensor::<f32>::new(&[pairs.len() as u64]);
+            pairs
+                .iter()
+                .enumerate()
+                .for_each(|(index, (_, probability))| {
+                    probability_tensor[index] = *probability;
+                });
+            let index = self
+                .model
+                .borrow()
+                .random_choose_with_dirichlet_noice(&probability_tensor)
+                .expect("random_choose_with_dirichlet_noice failed");
+
+            let pos = pairs[index].0;
+            if !board.is_forbidden(pos) {
+                return pos;
+            }
+            pairs.to_mut().swap_remove(index); // remove the forbidden position and try again
+        }
+        move_prob_pairs[0].0
+    }
+
     pub fn self_play(self: &mut Self) -> SelfPlayerOutcome {
         let mut board = RenjuBoard::default();
         let mut searcher = TreeSearcher::new(5f32, 1000u32, self.model.clone());
@@ -138,23 +240,8 @@ impl Trainer {
             let move_prob_pairs: Vec<((usize, usize), f32)> =
                 searcher.get_move_probability(&board, ts, self.temperature);
 
-            // determine the position to move
-            // For self-player, choose a position by probabilities and also dirichlet noice
-            let mut probability_tensor = Tensor::<f32>::new(&[move_prob_pairs.len() as u64]);
-            move_prob_pairs
-                .iter()
-                .enumerate()
-                .for_each(|(index, (_, probability))| {
-                    probability_tensor[index] = *probability;
-                });
-            let index = self
-                .model
-                .borrow()
-                .random_choose_with_dirichlet_noice(&probability_tensor)
-                .expect("random_choose_with_dirichlet_noice failed");
-
-            let pos = move_prob_pairs[index].0;
-            let children_count = searcher.update_with_position(pos);
+            let pos = self.pick_move(&mut board, &move_prob_pairs);
+            searcher.update_with_position(pos);
 
             // save board state
             board_state_list.push(board.clone());
@@ -167,6 +254,7 @@ impl Trainer {
                     continue;
                 }
                 s => {
+                    board.print();
                     let winner_list: Vec<f32> = player_list
                         .iter()
                         .map(|is_black_turn| match s {
@@ -190,7 +278,7 @@ fn get_best_model() -> PolicyValueModel {
 
     let ai_model = PolicyValueModel::load(export_dir).expect("Unable to load model");
 
-    let checkpoint_filename = "/Users/jerry/projects/renju/renju.git/game/saved.ckpt";
+    let checkpoint_filename = "best.ckpt";
     if fs::metadata(checkpoint_filename).is_ok() {
         match ai_model.restore(checkpoint_filename) {
             Err(e) => {

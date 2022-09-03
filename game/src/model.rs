@@ -41,6 +41,7 @@ pub trait RenjuModel {
         state_batch: &Tensor<f32>,
         mcts_probs: &Tensor<f32>,
         winner_batch: &Tensor<f32>,
+        lr: f32,
     ) -> Result<(f32 /*loss*/, f32 /*entropy*/), Status>;
 }
 
@@ -52,6 +53,7 @@ pub struct PolicyValueModel {
     train_input_state_batch: Operation,
     train_input_mcts_probs: Operation,
     train_input_winner_batch: Operation,
+    train_input_lr: Operation,
     train_output: Operation,
     export_input: Operation,
     export_output: Operation,
@@ -108,6 +110,9 @@ impl PolicyValueModel {
         let input_winner_batch_info = train_signature
             .get_input("winner_batch")
             .expect("Unable to find `winner_batch` in concreate function `train`");
+        let input_lr_info = train_signature
+            .get_input("lr")
+            .expect("Unable to find `lr` in concreate function `train`");
         let output_info = train_signature
             .get_output("output_0")
             .expect("Unable to find `loss` in concreate function `train`");
@@ -120,6 +125,9 @@ impl PolicyValueModel {
         let train_input_winner_batch = graph
             .operation_by_name_required(&input_winner_batch_info.name().name)
             .expect("Unable to find `winner_batch` op in concreate function `train`");
+        let train_input_lr = graph
+            .operation_by_name_required(&input_lr_info.name().name)
+            .expect("Unable to find `lr` op in concreate function `train`");
         let train_output = graph
             .operation_by_name_required(&output_info.name().name)
             .expect("Unable to find `output_0` op in concreate function `train`");
@@ -188,6 +196,7 @@ impl PolicyValueModel {
             train_input_state_batch: train_input_state_batch,
             train_input_mcts_probs: train_input_mcts_probs,
             train_input_winner_batch: train_input_winner_batch,
+            train_input_lr: train_input_lr,
             train_output: train_output,
             export_input: export_input_op,
             export_output: export_output_op,
@@ -277,11 +286,16 @@ impl RenjuModel for PolicyValueModel {
         state_batch: &Tensor<f32>,
         mcts_probs: &Tensor<f32>,
         winner_batch: &Tensor<f32>,
+        lr: f32,
     ) -> Result<(f32 /*loss*/, f32 /*entropy*/), Status> {
+        let lr_tensor = Tensor::<f32>::new(&[1])
+            .with_values(&[lr])
+            .expect("Unable to create lr tensor");
         let mut train_step = SessionRunArgs::new();
         train_step.add_feed(&self.train_input_state_batch, 0, &state_batch);
         train_step.add_feed(&self.train_input_mcts_probs, 0, &mcts_probs);
         train_step.add_feed(&self.train_input_winner_batch, 0, &winner_batch);
+        train_step.add_feed(&self.train_input_lr, 0, &lr_tensor);
         train_step.add_target(&self.train_output);
 
         let loss_token = train_step.request_fetch(&self.train_output, 0);

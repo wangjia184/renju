@@ -18,7 +18,7 @@ def create_model(board_width, board_height):
 
             # Define the tensorflow neural network
             # 1. Input:
-            self.inputs = tf.keras.Input( shape=(4, board_height, board_width), dtype=tf.dtypes.float32)
+            self.inputs = tf.keras.Input( shape=(4, board_height, board_width), dtype=tf.dtypes.float32, name="input")
             self.transposed_inputs = tf.keras.layers.Lambda( lambda x: tf.transpose(x, [0, 2, 3, 1]) )(self.inputs)
 
             # 2. Common Networks Layers
@@ -98,8 +98,10 @@ def create_model(board_width, board_height):
 
             self.model = tf.keras.Model(inputs=self.inputs, outputs=[self.action_fc, self.evaluation_fc2], name="renju_model")
             self.model.summary()
+ 
+            self.lr = tf.Variable(0.002, trainable=False, dtype=tf.dtypes.float32)
 
-            self.model.compile(optimizer=tf.keras.optimizers.Adam(),
+            self.model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate = self.lr),
                     loss=[self.action_loss, tf.keras.losses.MeanSquaredError()],
                     metrics=['accuracy'])
 
@@ -116,8 +118,10 @@ def create_model(board_width, board_height):
 
         @tf.function(input_signature=[tf.TensorSpec(shape=[None, 4, board_height, board_width],  dtype=tf.float32), 
                                   tf.TensorSpec(shape=[None, board_height * board_width],  dtype=tf.float32),
-                                  tf.TensorSpec(shape=[],  dtype=tf.float32) ])
-        def train(self, state_batch, mcts_probs, winner_batch):
+                                  tf.TensorSpec(shape=[],  dtype=tf.float32),
+                                  tf.TensorSpec(shape=[1],  dtype=tf.float32) ])
+        def train(self, state_batch, mcts_probs, winner_batch, lr):
+            self.lr.assign(tf.gather(lr, 0))
             with tf.GradientTape() as tape:
                 predictions = self.model(state_batch, training=True)  # Forward pass
                 # the loss function is configured in `compile()`
@@ -140,6 +144,8 @@ def create_model(board_width, board_height):
 
         @tf.function(input_signature=[tf.TensorSpec(shape=[], dtype=tf.string)])
         def save(self, checkpoint_path):
+            tf.print( 'save' )
+            tf.print( self.model.weights[0])
             tensor_names = [weight.name for weight in self.model.weights]
             tensors_to_save = [weight.read_value() for weight in self.model.weights]
             tf.raw_ops.Save(
@@ -149,11 +155,14 @@ def create_model(board_width, board_height):
 
         @tf.function(input_signature=[tf.TensorSpec(shape=[], dtype=tf.string)])
         def restore(self, checkpoint_path):
+            tf.print( self.model.weights[0])
             restored_tensors = {}
             for var in self.model.weights:
                 restored = tf.raw_ops.Restore( file_pattern=checkpoint_path, tensor_name=var.name, dt=var.dtype, name='restore')
-            var.assign(restored)
-            restored_tensors[var.name] = restored
+                var.assign(restored)
+                restored_tensors[var.name] = restored
+            tf.print( 'restore' )
+            tf.print( self.model.weights[0])
             return checkpoint_path
 
         @tf.function(input_signature=[tf.TensorSpec(shape=[None], dtype=tf.float32)])
