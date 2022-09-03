@@ -1,0 +1,3 @@
+[submodule "game/tensorflow/rust"]
+	path = game/tensorflow/rust
+	url = ../rust.git
