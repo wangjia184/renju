@@ -12,23 +12,23 @@ pub trait Player {
     fn notify_opponent_moved(self: &mut Self, board: &RenjuBoard, pos: (usize, usize));
 }
 
-pub struct Match<B, W>
+pub struct Match<'a, B, W>
 where
     B: Player,
     W: Player,
 {
     board: RenjuBoard,
-    black_player: Rc<RefCell<B>>,
-    white_player: Rc<RefCell<W>>,
+    black_player: &'a mut B,
+    white_player: &'a mut W,
 }
 
 // a match between black and white
-impl<B, W> Match<B, W>
+impl<'a, B, W> Match<'a, B, W>
 where
     B: Player,
     W: Player,
 {
-    pub fn new(black_player: Rc<RefCell<B>>, white_player: Rc<RefCell<W>>) -> Self {
+    pub fn new(black_player: &'a mut B, white_player: &'a mut W) -> Self {
         Self {
             board: RenjuBoard::default(),
             black_player: black_player,
@@ -43,25 +43,17 @@ where
             let is_black_turn = self.board.is_black_turn();
             if let TerminalState::AvailableMoves(ref moves) = state {
                 let pos = if is_black_turn {
-                    self.black_player
-                        .borrow_mut()
-                        .get_next_move(&mut self.board, moves)
+                    self.black_player.get_next_move(&mut self.board, moves)
                 } else {
-                    self.white_player
-                        .borrow_mut()
-                        .get_next_move(&mut self.board, moves)
+                    self.white_player.get_next_move(&mut self.board, moves)
                 };
 
                 state = self.board.do_move(pos);
 
                 if is_black_turn {
-                    self.white_player
-                        .borrow_mut()
-                        .notify_opponent_moved(&self.board, pos);
+                    self.white_player.notify_opponent_moved(&self.board, pos);
                 } else {
-                    self.black_player
-                        .borrow_mut()
-                        .notify_opponent_moved(&self.board, pos);
+                    self.black_player.notify_opponent_moved(&self.board, pos);
                 };
 
                 match state {
@@ -80,22 +72,33 @@ where
 // play with self to produce training data
 pub struct SelfPlayer {
     model: Rc<RefCell<PolicyValueModel>>,
-    searcher: MonteCarloTree<PolicyValueModel>,
+    tree: Rc<RefCell<MonteCarloTree<PolicyValueModel>>>,
     // temperature parameter in (0, 1] controls the level of exploration
     temperature: f32,
-    black_state_prob_pairs: Vec<(StateTensor, SquaredMatrix)>,
-    white_state_prob_pairs: Vec<(StateTensor, SquaredMatrix)>,
+    state_prob_pairs: Vec<(StateTensor, SquaredMatrix)>,
 }
 
 impl SelfPlayer {
-    pub fn new(model: Rc<RefCell<PolicyValueModel>>) -> Self {
-        Self {
-            model: model.clone(),
-            searcher: MonteCarloTree::new(5f32, 500u32, model),
-            temperature: 1e-3,
-            black_state_prob_pairs: Vec::with_capacity(100),
-            white_state_prob_pairs: Vec::with_capacity(100),
-        }
+    pub fn new_pair(model: Rc<RefCell<PolicyValueModel>>) -> (Self, Self) {
+        let tree = Rc::new(RefCell::new(MonteCarloTree::new(
+            5f32,
+            500u32,
+            model.clone(),
+        )));
+        (
+            Self {
+                model: model.clone(),
+                tree: tree.clone(),
+                temperature: 1e-3,
+                state_prob_pairs: Vec::with_capacity(100),
+            },
+            Self {
+                model: model,
+                tree: tree,
+                temperature: 1e-3,
+                state_prob_pairs: Vec::with_capacity(100),
+            },
+        )
     }
 
     // For self-player, choose a position by probabilities with dirichlet noice
@@ -131,42 +134,19 @@ impl SelfPlayer {
         move_prob_pairs[0].0
     }
 
-    pub fn consume<F>(self: &mut Self, state: TerminalState, mut cb: F)
+    pub fn consume<F>(mut self: Self, mut cb: F)
     where
-        F: FnMut(StateTensor, SquaredMatrix, f32),
+        F: FnMut(StateTensor, SquaredMatrix),
     {
-        let score = match state {
-            TerminalState::BlackWon => 1f32,
-            TerminalState::WhiteWon => -1f32,
-            TerminalState::Draw => 0f32,
-            _ => unreachable!(),
-        };
-        while !self.black_state_prob_pairs.is_empty() {
-            let (state_tensor, prob_matrix) = self.black_state_prob_pairs.swap_remove(0);
+        while !self.state_prob_pairs.is_empty() {
+            let (state_tensor, prob_matrix) = self.state_prob_pairs.swap_remove(0);
 
             get_equivalents(&state_tensor, &prob_matrix)
                 .into_iter()
                 .for_each(|(equi_state_tensor, equi_prob_matrix)| {
-                    cb(equi_state_tensor, equi_prob_matrix, score);
+                    cb(equi_state_tensor, equi_prob_matrix);
                 });
-            cb(state_tensor, prob_matrix, score);
-        }
-
-        let score = match state {
-            TerminalState::BlackWon => -1f32,
-            TerminalState::WhiteWon => 1f32,
-            TerminalState::Draw => 0f32,
-            _ => unreachable!(),
-        };
-        while !self.white_state_prob_pairs.is_empty() {
-            let (state_tensor, prob_matrix) = self.white_state_prob_pairs.swap_remove(0);
-
-            get_equivalents(&state_tensor, &prob_matrix)
-                .into_iter()
-                .for_each(|(equi_state_tensor, equi_prob_matrix)| {
-                    cb(equi_state_tensor, equi_prob_matrix, score);
-                });
-            cb(state_tensor, prob_matrix, score);
+            cb(state_tensor, prob_matrix);
         }
     }
 }
@@ -177,9 +157,10 @@ impl Player for SelfPlayer {
         board: &mut RenjuBoard,
         choices: &Vec<(usize, usize)>,
     ) -> (usize, usize) {
-        let move_prob_pairs: Vec<((usize, usize), f32)> =
-            self.searcher
-                .get_move_probability(&board, choices, self.temperature);
+        let move_prob_pairs: Vec<((usize, usize), f32)> = self
+            .tree
+            .borrow_mut()
+            .get_move_probability(&board, choices, self.temperature);
 
         // 15x15 tensor records the probability of each move
         let mut mcts_prob_matrix = SquaredMatrix::default();
@@ -189,19 +170,18 @@ impl Player for SelfPlayer {
                 mcts_prob_matrix[*row][*col] = *probability;
             });
 
-        if board.is_black_turn() {
-            self.black_state_prob_pairs
-                .push((board.get_state_tensor(), mcts_prob_matrix));
-        } else {
-            self.white_state_prob_pairs
-                .push((board.get_state_tensor(), mcts_prob_matrix));
-        }
+        self.state_prob_pairs
+            .push((board.get_state_tensor(), mcts_prob_matrix));
 
-        self.pick_move(&move_prob_pairs, board)
+        let pos = self.pick_move(&move_prob_pairs, board);
+
+        self.tree.borrow_mut().update_with_position(pos);
+        pos
     }
 
-    fn notify_opponent_moved(self: &mut Self, _: &RenjuBoard, pos: (usize, usize)) {
-        self.searcher.update_with_position(pos);
+    fn notify_opponent_moved(self: &mut Self, _: &RenjuBoard, _: (usize, usize)) {
+        // black and white are sharing the same tree, no need to update
+        //self.tree.borrow_mut().update_with_position(pos);
     }
 }
 

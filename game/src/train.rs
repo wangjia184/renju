@@ -1,5 +1,5 @@
 use crate::*;
-use bytemuck::cast_slice;
+
 use ndarray::prelude::*;
 use ndarray::Array;
 
@@ -20,7 +20,7 @@ pub struct Trainer {
     lr_multiplier: f32, // adaptively adjust the learning rate based on KL
 }
 
-const BATCH_SIZE: usize = 500;
+const BATCH_SIZE: usize = 3;
 
 impl Trainer {
     pub fn new() -> Self {
@@ -61,30 +61,10 @@ impl Trainer {
                     count += 1;
                 }
 
-                let tensor1 = Tensor::<f32>::new(&[
-                    BATCH_SIZE as u64,
-                    4,
-                    game::BOARD_SIZE as u64,
-                    game::BOARD_SIZE as u64,
-                ])
-                .with_values(cast_slice(&state_tensor_batch))
-                .expect("Unable to create state batch tensor");
-
-                let tensor2 = Tensor::<f32>::new(&[
-                    BATCH_SIZE as u64,
-                    game::BOARD_SIZE as u64 * game::BOARD_SIZE as u64,
-                ])
-                .with_values(cast_slice(&mcts_probs_batch))
-                .expect("Unable to create MCTS probability batch tensor");
-
-                let tensor3 = Tensor::<f32>::new(&[BATCH_SIZE as u64])
-                    .with_values(cast_slice(&winner_batch))
-                    .expect("Unable to create winner batch tensor");
-
                 let (old_log_probs, old_value) = self
                     .model
                     .borrow()
-                    .predict(&tensor1)
+                    .predict(&state_tensor_batch)
                     .expect("Failed to predict");
 
                 let old_log_probs = Array::from(old_log_probs);
@@ -98,9 +78,9 @@ impl Trainer {
                         .model
                         .borrow()
                         .train(
-                            &tensor1,
-                            &tensor2,
-                            &tensor3,
+                            &state_tensor_batch,
+                            &mcts_probs_batch,
+                            &winner_batch,
                             self.learn_rate * self.lr_multiplier,
                         )
                         .expect("Failed to train");
@@ -108,7 +88,7 @@ impl Trainer {
                     let (new_log_probs, new_value) = self
                         .model
                         .borrow()
-                        .predict(&tensor1)
+                        .predict(&state_tensor_batch)
                         .expect("Failed to predict");
 
                     let new_log_probs = Array::from(new_log_probs);
@@ -146,20 +126,37 @@ impl Trainer {
                     .borrow()
                     .save(&filename)
                     .expect("Unable to save checkpoint");*/
+                self.model
+                    .borrow()
+                    .save("best.ckpt")
+                    .expect("Unable to save checkpoint");
             }
         }
     }
 
     fn collect_data(self: &mut Self) {
-        let self_player = Rc::new(RefCell::new(SelfPlayer::new(self.model.clone())));
-        let state = Match::new(self_player.clone(), self_player.clone()).play_to_end();
-        self_player.borrow_mut().consume(
-            state,
-            |state_tensor: StateTensor, prob_matrix: SquaredMatrix, score: f32| {
-                self.data_buffer
-                    .push(TrainDataItem(state_tensor, prob_matrix, score));
-            },
-        );
+        let (mut black_player, mut white_player) = SelfPlayer::new_pair(self.model.clone());
+        let state = Match::new(&mut black_player, &mut white_player).play_to_end();
+        let score = match &state {
+            TerminalState::BlackWon => 1f32,
+            TerminalState::WhiteWon => -1f32,
+            TerminalState::Draw => 0f32,
+            _ => unreachable!(),
+        };
+        black_player.consume(|state_tensor: StateTensor, prob_matrix: SquaredMatrix| {
+            self.data_buffer
+                .push(TrainDataItem(state_tensor, prob_matrix, score));
+        });
+        let score = match &state {
+            TerminalState::BlackWon => -1f32,
+            TerminalState::WhiteWon => 1f32,
+            TerminalState::Draw => 0f32,
+            _ => unreachable!(),
+        };
+        white_player.consume(|state_tensor: StateTensor, prob_matrix: SquaredMatrix| {
+            self.data_buffer
+                .push(TrainDataItem(state_tensor, prob_matrix, score));
+        });
     }
 }
 

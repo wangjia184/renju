@@ -1,3 +1,8 @@
+use bytemuck::cast_slice;
+use ndarray::prelude::*;
+use ndarray::Array;
+use ndarray::IxDynImpl;
+use ndarray::OwnedRepr;
 use tensorflow::Graph;
 use tensorflow::Operation;
 use tensorflow::SavedModelBundle;
@@ -10,6 +15,8 @@ use tensorflow::Status;
 use tensorflow_sys as tf;
 
 use std::sync::Once;
+
+use crate::*;
 
 static START: Once = Once::new();
 
@@ -34,13 +41,16 @@ pub fn load_plugable_device(library_filename: &str) -> Result<(), Status> {
 }
 
 pub trait RenjuModel {
-    fn predict(self: &Self, state_batch: &Tensor<f32>) -> Result<(Tensor<f32>, f32), Status>;
+    fn predict(
+        self: &Self,
+        state_tensors: &[StateTensor],
+    ) -> Result<(ArrayBase<OwnedRepr<f32>, Dim<[usize; 3]>>, f32), Status>;
 
     fn train(
         self: &Self,
-        state_batch: &Tensor<f32>,
-        mcts_probs: &Tensor<f32>,
-        winner_batch: &Tensor<f32>,
+        state_tensors: &[StateTensor],
+        prob_matrixes: &[SquaredMatrix],
+        scores: &[f32],
         lr: f32,
     ) -> Result<(f32 /*loss*/, f32 /*entropy*/), Status>;
 }
@@ -67,11 +77,11 @@ impl PolicyValueModel {
     pub fn load(export_dir: &str) -> Result<Self, Status> {
         START.call_once(|| {
             tf::library::load().expect("Unable to load libtensorflow");
-            /*
-            match load_plugable_device("libmetal_plugin.dylib") {
+            //*
+            match load_plugable_device("libmetal_plugins.dylib") {
                 Ok(_) => println!("Loaded libmetal_plugin.dylib successfully."),
                 Err(_) => println!("WARNING: Unable to load plugin."),
-            }; */
+            }; //*/
         });
 
         let mut graph = Graph::new();
@@ -257,12 +267,20 @@ impl PolicyValueModel {
 }
 
 impl RenjuModel for PolicyValueModel {
-    fn predict(self: &Self, state_batch: &Tensor<f32>) -> Result<(Tensor<f32>, f32), Status> {
-        let shape = state_batch.shape();
-        assert_eq!(shape.dims(), Some(4));
-        assert_eq!(shape[1], Some(4));
-        assert_eq!(shape[2], Some(15));
-        assert_eq!(shape[3], Some(15));
+    fn predict(
+        self: &Self,
+        state_tensors: &[StateTensor],
+    ) -> Result<(ArrayBase<OwnedRepr<f32>, Dim<[usize; 3]>>, f32), Status> {
+        assert!(!state_tensors.is_empty());
+        let state_batch = Tensor::<f32>::new(&[
+            state_tensors.len() as u64,
+            state_tensors[0].len() as u64,
+            state_tensors[0][0].len() as u64,
+            state_tensors[0][0][0].len() as u64,
+        ])
+        .with_values(cast_slice(&state_tensors))
+        .expect("Unable to create state batch tensor");
+
         let mut prediction = SessionRunArgs::new();
         prediction.add_feed(&self.predict_input, 0, &state_batch);
         prediction.add_target(&self.predict_output);
@@ -278,23 +296,63 @@ impl RenjuModel for PolicyValueModel {
             .fetch(value_token)
             .expect("Unable to retrieve log result");
 
-        Ok((log_action, value[0]))
+        assert_eq!(
+            log_action.dims(),
+            [
+                state_tensors.len() as u64,
+                1u64,
+                game::BOARD_SIZE as u64 * game::BOARD_SIZE as u64
+            ]
+        );
+
+        let dim = Dim([state_tensors.len(), 1, game::BOARD_SIZE * game::BOARD_SIZE]);
+        let data: Vec<_> = log_action.iter().map(|x| x.clone()).collect();
+        // We can safely unwrap this because we know that `data` will have the
+        // correct number of elements to conform to `dim`.
+        let x = Array::from_shape_vec(dim, data).unwrap();
+
+        Ok((x, value[0]))
     }
 
     fn train(
         self: &Self,
-        state_batch: &Tensor<f32>,
-        mcts_probs: &Tensor<f32>,
-        winner_batch: &Tensor<f32>,
+        state_tensors: &[StateTensor],
+        prob_matrixes: &[SquaredMatrix],
+        scores: &[f32],
         lr: f32,
     ) -> Result<(f32 /*loss*/, f32 /*entropy*/), Status> {
+        assert!(!state_tensors.is_empty());
+        assert_eq!(state_tensors.len(), prob_matrixes.len());
+        assert_eq!(state_tensors.len(), scores.len());
+
+        let state_batch = Tensor::<f32>::new(&[
+            state_tensors.len() as u64,
+            state_tensors[0].len() as u64,
+            state_tensors[0][0].len() as u64,
+            state_tensors[0][0][0].len() as u64,
+        ])
+        .with_values(cast_slice(state_tensors))
+        .expect("Unable to create state batch tensor");
+
+        let probs_tensor = Tensor::<f32>::new(&[
+            prob_matrixes.len() as u64,
+            (prob_matrixes[0].len() * prob_matrixes[0][0].len()) as u64,
+        ])
+        .with_values(cast_slice(prob_matrixes))
+        .expect("Unable to create probability tensor");
+
+        let score_tensor = Tensor::<f32>::new(&[scores.len() as u64])
+            .with_values(cast_slice(scores))
+            .expect("Unable to create score tensor");
+
         let lr_tensor = Tensor::<f32>::new(&[1])
             .with_values(&[lr])
             .expect("Unable to create lr tensor");
+
         let mut train_step = SessionRunArgs::new();
         train_step.add_feed(&self.train_input_state_batch, 0, &state_batch);
-        train_step.add_feed(&self.train_input_mcts_probs, 0, &mcts_probs);
-        train_step.add_feed(&self.train_input_winner_batch, 0, &winner_batch);
+        train_step.add_feed(&self.train_input_mcts_probs, 0, &probs_tensor);
+        train_step.add_feed(&self.train_input_winner_batch, 0, &score_tensor);
         train_step.add_feed(&self.train_input_lr, 0, &lr_tensor);
         train_step.add_target(&self.train_output);
 

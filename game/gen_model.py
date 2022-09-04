@@ -107,7 +107,7 @@ def create_model(board_width, board_height):
 
 
         @tf.function(input_signature=[ tf.TensorSpec([None, board_height * board_width], tf.float32),
-            tf.TensorSpec([None, None, board_height * board_width], tf.float32)
+            tf.TensorSpec([None, 1, board_height * board_width], tf.float32)
         ])
         def action_loss(self, labels, predictions):
             # labels are probabilities; predictions are logits

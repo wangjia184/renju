@@ -1,5 +1,5 @@
 use crate::*;
-use bytemuck::cast_slice;
+
 use core::cell::RefCell;
 use std::{
     collections::HashMap,
@@ -203,6 +203,10 @@ where
                 }
             }
         } else {
+            if choices.len() > 1 {
+                println!("Never explored before");
+            }
+
             // no children, never explored this branch. hence we need use the available moves from outside
             state = Some(TerminalState::AvailableMoves(choices.clone()));
         }
@@ -217,10 +221,7 @@ where
                 assert!(!choices.is_empty());
 
                 // Evaluate the leaf using a network
-                let mut state_tensor =
-                    Tensor::<f32>::new(&[1, 4, board.width() as u64, board.height() as u64]);
-
-                state_tensor.copy_from_slice(cast_slice(&board.get_state_tensor()));
+                let state_tensor: [StateTensor; 1] = [board.get_state_tensor()];
 
                 let (log_action_tensor, score) = self
                     .model
@@ -236,7 +237,7 @@ where
 
                 // extend children
                 for (row, col) in choices {
-                    let probability = log_action_tensor[row * board.width() + col].exp();
+                    let probability = log_action_tensor[[0, 0, row * board.width() + col]].exp();
                     node.borrow_mut().create_child((row, col), probability);
                 }
             }
@@ -274,6 +275,7 @@ where
         temperature: f32,
     ) -> Vec<((usize, usize) /*pos*/, f32 /* probability */)> {
         for _ in 0..self.iterations {
+            // TODO : avoid heap allocation, use stack only
             self.rollout(board.clone(), choices);
         }
 
