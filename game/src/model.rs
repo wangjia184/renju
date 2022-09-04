@@ -336,12 +336,13 @@ impl RenjuModel for PolicyValueModel {
 
         let probs_tensor = Tensor::<f32>::new(&[
             prob_matrixes.len() as u64,
+            1,
             (prob_matrixes[0].len() * prob_matrixes[0][0].len()) as u64,
         ])
         .with_values(cast_slice(prob_matrixes))
         .expect("Unable to create probability tensor");
 
-        let score_tensor = Tensor::<f32>::new(&[scores.len() as u64])
+        let score_tensor = Tensor::<f32>::new(&[prob_matrixes.len() as u64, 1, 1])
             .with_values(cast_slice(scores))
             .expect("Unable to create score tensor");
 

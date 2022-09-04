@@ -24,10 +24,6 @@ tensorflow-sys = { path = "./tensorflow/rust/tensorflow-sys", features = [
 ] }
 
 
-ndarray = { version = "0.15.6", features = ["blas"] }
-blas-src = { version = "0.8.0", default-features = false, features = [
-    "accelerate",
-] }
 # BLAS source choices:
 # accelerate, which is the one in the Accelerate framework (macOS only),
 # blis, which is the one in BLIS,
@@ -48,6 +44,11 @@ rand = "0.8.5"
 # is why it is not a default feature -- it could become hard to disable.
 rusqlite = { version = "0.28.0", features = ["bundled", "backup"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+ndarray = { version = "0.15.6", features = ["blas"] }
+blas-src = { version = "0.8.0", default-features = false, features = [
+    "accelerate",
+] }
 
 [dependencies.uuid]
 version = "1.1.2"

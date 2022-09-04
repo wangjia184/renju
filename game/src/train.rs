@@ -4,6 +4,7 @@ use ndarray::prelude::*;
 use ndarray::Array;
 
 use std::{cell::RefCell, fs, rc::Rc};
+const BATCH_SIZE: usize = 1;
 
 pub struct TrainDataItem(
     StateTensor,   /* 4x15x15 state */
@@ -19,8 +20,6 @@ pub struct Trainer {
     learn_rate: f32,
     lr_multiplier: f32, // adaptively adjust the learning rate based on KL
 }
-
-const BATCH_SIZE: usize = 2;
 
 impl Trainer {
     pub fn new() -> Self {
@@ -42,7 +41,7 @@ impl Trainer {
         loop {
             self.collect_data();
 
-            if self.data_buffer.len() > BATCH_SIZE as usize {
+            while self.data_buffer.len() > BATCH_SIZE as usize {
                 let mut state_tensor_batch = [StateTensor::<f32>::default(); BATCH_SIZE];
                 let mut mcts_probs_batch = [SquaredMatrix::<f32>::default(); BATCH_SIZE];
                 let mut winner_batch = [0f32; BATCH_SIZE];
