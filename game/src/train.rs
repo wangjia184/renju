@@ -20,7 +20,7 @@ pub struct Trainer {
     lr_multiplier: f32, // adaptively adjust the learning rate based on KL
 }
 
-const BATCH_SIZE: usize = 3;
+const BATCH_SIZE: usize = 2;
 
 impl Trainer {
     pub fn new() -> Self {

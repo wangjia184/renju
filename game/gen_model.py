@@ -28,7 +28,7 @@ def create_model(board_width, board_height):
                 padding="same",
                 data_format="channels_last",
                 activation=tf.keras.activations.relu,
-                kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta)
+                #kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta)
                 )(self.transposed_inputs)
 
             self.conv2 = tf.keras.layers.Conv2D( name="conv2", 
@@ -37,7 +37,7 @@ def create_model(board_width, board_height):
                 padding="same", 
                 data_format="channels_last", 
                 activation=tf.keras.activations.relu,
-                kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta)
+                #kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta)
                 )(self.conv1)
 
             self.conv3 = tf.keras.layers.Conv2D( name="conv3",
@@ -46,7 +46,7 @@ def create_model(board_width, board_height):
                 padding="same",
                 data_format="channels_last",
                 activation=tf.keras.activations.relu,
-                kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta)
+                #kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta)
                 )(self.conv2)
 
             # 3-1 Action Networks
@@ -56,7 +56,7 @@ def create_model(board_width, board_height):
                 padding="same",
                 data_format="channels_last",
                 activation=tf.keras.activations.relu,
-                kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta)
+                #kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta)
                 )(self.conv3)
 
             # flatten tensor
@@ -68,7 +68,7 @@ def create_model(board_width, board_height):
             self.action_fc = tf.keras.layers.Dense( board_height * board_width,
                 activation=tf.nn.log_softmax,
                 name="action_fc",
-                kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta)
+                #kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta)
                 )(self.action_conv_flat)
 
             # 4 Evaluation Networks
@@ -78,7 +78,8 @@ def create_model(board_width, board_height):
                 padding="same",
                 data_format="channels_last",
                 activation=tf.keras.activations.relu,
-                kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta))(self.conv3)
+                #kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta)
+                )(self.conv3)
 
             self.evaluation_conv_flat = tf.keras.layers.Reshape( (-1, 2 * board_height * board_width),
                 name="evaluation_conv_flat" 
@@ -87,13 +88,13 @@ def create_model(board_width, board_height):
             self.evaluation_fc1 = tf.keras.layers.Dense( 64,
                 activation=tf.keras.activations.relu,
                 name="evaluation_fc1",
-                kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta)
+                #kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta)
                 )(self.evaluation_conv_flat)
 
             self.evaluation_fc2 = tf.keras.layers.Dense( 1, 
                 activation=tf.keras.activations.tanh,
                 name="evaluation_fc2",
-                kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta)
+                #kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta)
                 )(self.evaluation_fc1)
 
             self.model = tf.keras.Model(inputs=self.inputs, outputs=[self.action_fc, self.evaluation_fc2], name="renju_model")
@@ -115,12 +116,24 @@ def create_model(board_width, board_height):
                         tf.reduce_sum(tf.multiply(labels, predictions[0]), 1)))
            
 
+        @tf.function(input_signature=[
+            tf.TensorSpec([None, 4, board_height, board_width], tf.float32),
+        ])
+        def predict(self, state_batch):
+            if tf.shape(state_batch)[0] > 1:
+                tf.print(state_batch, summarize=-1)
+            x = self.model(state_batch)
+            if tf.shape(state_batch)[0] > 1:
+                tf.print(x, summarize=-1)
+            return x
 
         @tf.function(input_signature=[tf.TensorSpec(shape=[None, 4, board_height, board_width],  dtype=tf.float32), 
                                   tf.TensorSpec(shape=[None, board_height * board_width],  dtype=tf.float32),
                                   tf.TensorSpec(shape=[],  dtype=tf.float32),
                                   tf.TensorSpec(shape=[1],  dtype=tf.float32) ])
         def train(self, state_batch, mcts_probs, winner_batch, lr):
+            
+
             self.lr.assign(tf.gather(lr, 0))
             with tf.GradientTape() as tape:
                 predictions = self.model(state_batch, training=True)  # Forward pass
@@ -136,16 +149,10 @@ def create_model(board_width, board_height):
 
             return (loss, entropy)
 
-        @tf.function(input_signature=[
-            tf.TensorSpec([None, 4, board_height, board_width], tf.float32),
-        ])
-        def predict(self, state_batch):
-            return self.model(state_batch)
+        
 
         @tf.function(input_signature=[tf.TensorSpec(shape=[], dtype=tf.string)])
         def save(self, checkpoint_path):
-            tf.print( 'save' )
-            tf.print( self.model.weights[0])
             tensor_names = [weight.name for weight in self.model.weights]
             tensors_to_save = [weight.read_value() for weight in self.model.weights]
             tf.raw_ops.Save(
@@ -155,14 +162,11 @@ def create_model(board_width, board_height):
 
         @tf.function(input_signature=[tf.TensorSpec(shape=[], dtype=tf.string)])
         def restore(self, checkpoint_path):
-            tf.print( self.model.weights[0])
             restored_tensors = {}
             for var in self.model.weights:
                 restored = tf.raw_ops.Restore( file_pattern=checkpoint_path, tensor_name=var.name, dt=var.dtype, name='restore')
                 var.assign(restored)
                 restored_tensors[var.name] = restored
-            tf.print( 'restore' )
-            tf.print( self.model.weights[0])
             return checkpoint_path
 
         @tf.function(input_signature=[tf.TensorSpec(shape=[None], dtype=tf.float32)])
