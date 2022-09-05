@@ -18,10 +18,11 @@ tokio-util = { version = "0.7.2", features = ["io"] }
 
 bytemuck = "1.12.1"
 regex = "1.6.0"
-tensorflow = { path = "./tensorflow/rust", features = ["ndarray"] }
-tensorflow-sys = { path = "./tensorflow/rust/tensorflow-sys", features = [
-    "runtime_linking",
-] }
+tensorflow = { version = "0.19.0", features = [
+    "ndarray",
+] } # path = "./tensorflow/rust",
+#  path = "./tensorflow/rust/tensorflow-sys"
+tensorflow-sys = { version = "0.22.0", features = ["runtime_linking"] }
 
 
 # BLAS source choices:

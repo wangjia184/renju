@@ -3,7 +3,7 @@ use crate::*;
 use ndarray::prelude::*;
 
 use std::{cell::RefCell, fs, rc::Rc};
-const BATCH_SIZE: usize = 2;
+const BATCH_SIZE: usize = 500;
 
 pub struct TrainDataItem(
     StateTensor,   /* 4x15x15 state */

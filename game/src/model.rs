@@ -17,7 +17,7 @@ use std::sync::Once;
 use crate::*;
 
 static START: Once = Once::new();
-
+/*
 pub fn load_plugable_device(library_filename: &str) -> Result<(), Status> {
     use std::ffi::CString;
     let c_filename = CString::new(library_filename)?;
@@ -37,7 +37,7 @@ pub fn load_plugable_device(library_filename: &str) -> Result<(), Status> {
         Ok(())
     }
 }
-
+ */
 pub trait RenjuModel {
     fn predict(
         self: &Self,
@@ -75,11 +75,11 @@ impl PolicyValueModel {
     pub fn load(export_dir: &str) -> Result<Self, Status> {
         START.call_once(|| {
             tf::library::load().expect("Unable to load libtensorflow");
-            //*
+            /*
             match load_plugable_device("libmetal_plugins.dylib") {
                 Ok(_) => println!("Loaded libmetal_plugin.dylib successfully."),
                 Err(_) => println!("WARNING: Unable to load plugin."),
-            }; //*/
+            }; */
         });
 
         let mut graph = Graph::new();
