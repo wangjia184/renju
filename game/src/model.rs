@@ -1,8 +1,6 @@
 use bytemuck::cast_slice;
 use ndarray::prelude::*;
-use ndarray::Array;
-use ndarray::IxDynImpl;
-use ndarray::OwnedRepr;
+use ndarray::{Array, OwnedRepr};
 use tensorflow::Graph;
 use tensorflow::Operation;
 use tensorflow::SavedModelBundle;
@@ -61,8 +59,8 @@ pub struct PolicyValueModel {
     predict_input: Operation,
     predict_output: Operation,
     train_input_state_batch: Operation,
-    train_input_mcts_probs: Operation,
-    train_input_winner_batch: Operation,
+    train_input_prob_batch: Operation,
+    train_input_score_batch: Operation,
     train_input_lr: Operation,
     train_output: Operation,
     export_input: Operation,
@@ -114,12 +112,12 @@ impl PolicyValueModel {
         let input_state_batch_info = train_signature
             .get_input("state_batch")
             .expect("Unable to find `state_batch` in concreate function `train`");
-        let input_mcts_probs_info = train_signature
-            .get_input("mcts_probs")
-            .expect("Unable to find `mcts_probs` in concreate function `train`");
-        let input_winner_batch_info = train_signature
-            .get_input("winner_batch")
-            .expect("Unable to find `winner_batch` in concreate function `train`");
+        let input_prob_batch_info = train_signature
+            .get_input("prob_batch")
+            .expect("Unable to find `prob_batch` in concreate function `train`");
+        let input_score_batch_info = train_signature
+            .get_input("score_batch")
+            .expect("Unable to find `score_batch` in concreate function `train`");
         let input_lr_info = train_signature
             .get_input("lr")
             .expect("Unable to find `lr` in concreate function `train`");
@@ -129,12 +127,12 @@ impl PolicyValueModel {
         let train_input_state_batch = graph
             .operation_by_name_required(&input_state_batch_info.name().name)
             .expect("Unable to find `state_batch` op in concreate function `train`");
-        let train_input_mcts_probs = graph
-            .operation_by_name_required(&input_mcts_probs_info.name().name)
-            .expect("Unable to find `mcts_probs` op in concreate function `train`");
-        let train_input_winner_batch = graph
-            .operation_by_name_required(&input_winner_batch_info.name().name)
-            .expect("Unable to find `winner_batch` op in concreate function `train`");
+        let train_input_prob_batch = graph
+            .operation_by_name_required(&input_prob_batch_info.name().name)
+            .expect("Unable to find `prob_batch` op in concreate function `train`");
+        let train_input_score_batch = graph
+            .operation_by_name_required(&input_score_batch_info.name().name)
+            .expect("Unable to find `score_batch` op in concreate function `train`");
         let train_input_lr = graph
             .operation_by_name_required(&input_lr_info.name().name)
             .expect("Unable to find `lr` op in concreate function `train`");
@@ -204,8 +202,8 @@ impl PolicyValueModel {
             predict_input: predict_input_op,
             predict_output: predict_output_op,
             train_input_state_batch: train_input_state_batch,
-            train_input_mcts_probs: train_input_mcts_probs,
-            train_input_winner_batch: train_input_winner_batch,
+            train_input_prob_batch,
+            train_input_score_batch,
             train_input_lr: train_input_lr,
             train_output: train_output,
             export_input: export_input_op,
@@ -311,6 +309,9 @@ impl RenjuModel for PolicyValueModel {
         // correct number of elements to conform to `dim`.
         let x = Array::from_shape_vec(dim, data).unwrap();
 
+        //println!("{:?}", log_action);
+        //println!("{:?}", value);
+
         Ok((x, value[0]))
     }
 
@@ -352,8 +353,8 @@ impl RenjuModel for PolicyValueModel {
 
         let mut train_step = SessionRunArgs::new();
         train_step.add_feed(&self.train_input_state_batch, 0, &state_batch);
-        train_step.add_feed(&self.train_input_mcts_probs, 0, &probs_tensor);
-        train_step.add_feed(&self.train_input_winner_batch, 0, &score_tensor);
+        train_step.add_feed(&self.train_input_prob_batch, 0, &probs_tensor);
+        train_step.add_feed(&self.train_input_score_batch, 0, &score_tensor);
         train_step.add_feed(&self.train_input_lr, 0, &lr_tensor);
         train_step.add_target(&self.train_output);
 

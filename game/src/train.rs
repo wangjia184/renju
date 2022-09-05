@@ -1,10 +1,9 @@
 use crate::*;
 
 use ndarray::prelude::*;
-use ndarray::Array;
 
 use std::{cell::RefCell, fs, rc::Rc};
-const BATCH_SIZE: usize = 1;
+const BATCH_SIZE: usize = 2;
 
 pub struct TrainDataItem(
     StateTensor,   /* 4x15x15 state */
@@ -66,7 +65,6 @@ impl Trainer {
                     .predict(&state_tensor_batch)
                     .expect("Failed to predict");
 
-                let old_log_probs = Array::from(old_log_probs);
                 let old_probs = old_log_probs.mapv(f32::exp);
 
                 let mut kl: f32 = 0f32;
@@ -89,8 +87,6 @@ impl Trainer {
                         .borrow()
                         .predict(&state_tensor_batch)
                         .expect("Failed to predict");
-
-                    let new_log_probs = Array::from(new_log_probs);
 
                     // https://docs.rs/ndarray/latest/ndarray/doc/ndarray_for_numpy_users/index.html
                     // kl = np.mean(np.sum(old_probs * (old_log_probs - new_log_probs), axis=1))
