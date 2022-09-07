@@ -57,9 +57,18 @@ where
                 };
 
                 match state {
-                    TerminalState::BlackWon => return state,
-                    TerminalState::WhiteWon => return state,
-                    TerminalState::Draw => return state,
+                    TerminalState::BlackWon => {
+                        //self.board.print();
+                        return state;
+                    }
+                    TerminalState::WhiteWon => {
+                        //self.board.print();
+                        return state;
+                    }
+                    TerminalState::Draw => {
+                        //self.board.print();
+                        return state;
+                    }
                     _ => continue,
                 }
             } else {
@@ -81,7 +90,7 @@ pub struct SelfPlayer {
 impl SelfPlayer {
     pub fn new_pair(model: Rc<RefCell<PolicyValueModel>>) -> (Self, Self) {
         let tree = Rc::new(RefCell::new(MonteCarloTree::new(
-            5f32,
+            1f32,
             500u32,
             model.clone(),
         )));

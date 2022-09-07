@@ -121,6 +121,29 @@ def create_model(board_width, board_height):
             predictions = self.model(state_batch)
             #if tf.shape(state_batch)[0] > 1:
             #    tf.print(predictions, summarize=-1)
+
+            batch_size = tf.shape(state_batch)[0]
+            if batch_size > 1:
+                value_predictions = predictions[1]
+                all_same = True
+                last = value_predictions[0][0][0]
+                for i in tf.range(batch_size):
+                    if last != value_predictions[i][0][0]:
+                        all_same = False
+                        break
+                if all_same:
+                    tf.print( "WARNING: all value predictions are the same! ")
+
+                policy_predictions = predictions[0]
+                all_same = True
+                last = policy_predictions[0][0][0]
+                for i in tf.range(batch_size):
+                    if last != policy_predictions[i][0][0]:
+                        all_same = False
+                        break
+                if all_same:
+                    tf.print( "WARNING: all policy predictions could be the same?! ")
+
             return predictions
 
         @tf.function(input_signature=[ tf.TensorSpec([None, 1, board_height * board_width], tf.float32),
@@ -133,7 +156,7 @@ def create_model(board_width, board_height):
             # labels are probabilities; predictions are logits
             action_loss = tf.negative(tf.reduce_mean(
                         tf.reduce_sum(tf.multiply(labels, predictions), 2)))
-            tf.print("action_loss=", action_loss)
+            #tf.print("action_loss=", action_loss)
             return action_loss
 
         @tf.function(input_signature=[ tf.TensorSpec([None, 1, 1], tf.float32),
@@ -144,7 +167,7 @@ def create_model(board_width, board_height):
             #tf.print(predictions, summarize=-1)
 
             value_loss = tf.reduce_mean( tf.losses.mean_squared_error(labels, predictions) )
-            tf.print("value_loss=", value_loss)
+            #tf.print("value_loss=", value_loss)
             return value_loss
 
 
@@ -168,12 +191,43 @@ def create_model(board_width, board_height):
 
             return (loss, entropy)
 
+
+
+        @tf.function
+        def export_param(self):
+            args = []
+            for var in self.model.trainable_variables:
+                args.append( tf.strings.join( [var.name,
+                    tf.io.encode_base64(tf.io.serialize_tensor(var.read_value()))]
+                    , ">"))
+
+            
+            encoded_str = tf.strings.join(args, "!")
+            #tf.print(encoded_str)
+            # https://www.tensorflow.org/api_docs/python/tf/strings
+            return encoded_str
+
+
+        @tf.function(input_signature=[tf.TensorSpec(shape=[], dtype=tf.string)])
+        def import_param(self, encoded_str):
+            args = tf.strings.split(encoded_str, sep=tf.convert_to_tensor('!'))
+            for arg in args:
+                pair = tf.strings.split( arg, sep=tf.convert_to_tensor('>'))
+                tensor_value = tf.io.parse_tensor(tf.io.decode_base64(pair[1]), out_type=tf.float32)
+                
+                for var in self.model.trainable_variables:
+                    if tf.math.equal( tf.convert_to_tensor(var.name), pair[0]):
+                        var.assign(tensor_value)
+                        #tf.print( var.name, "Assigned")
+                
+            return encoded_str
+            
         
 
         @tf.function(input_signature=[tf.TensorSpec(shape=[], dtype=tf.string)])
         def save(self, checkpoint_path):
-            tensor_names = [weight.name for weight in self.model.weights]
-            tensors_to_save = [weight.read_value() for weight in self.model.weights]
+            tensor_names = [weight.name for weight in self.model.trainable_variables]
+            tensors_to_save = [weight.read_value() for weight in self.model.trainable_variables]
             tf.raw_ops.Save(
                 filename=checkpoint_path, tensor_names=tensor_names,
                 data=tensors_to_save, name='save')
@@ -182,7 +236,7 @@ def create_model(board_width, board_height):
         @tf.function(input_signature=[tf.TensorSpec(shape=[], dtype=tf.string)])
         def restore(self, checkpoint_path):
             restored_tensors = {}
-            for var in self.model.weights:
+            for var in self.model.trainable_variables:
                 restored = tf.raw_ops.Restore( file_pattern=checkpoint_path, tensor_name=var.name, dt=var.dtype, name='restore')
                 var.assign(restored)
                 restored_tensors[var.name] = restored
@@ -211,5 +265,7 @@ model.model.save('renju_15x15_model',
             'train' : model.train.get_concrete_function(), 
             'save' : model.save.get_concrete_function(),
             'restore' : model.restore.get_concrete_function(),
-            'random_choose_with_dirichlet_noice' : model.random_choose_with_dirichlet_noice.get_concrete_function() 
+            'random_choose_with_dirichlet_noice' : model.random_choose_with_dirichlet_noice.get_concrete_function(),
+            'export_param' : model.export_param.get_concrete_function(),
+            'import_param' : model.import_param.get_concrete_function(),
         })

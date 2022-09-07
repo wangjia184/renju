@@ -1,23 +1,80 @@
 use crate::*;
+use ndarray::{prelude::*, Data};
+use std::sync::Mutex;
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use tokio::task;
 
-use ndarray::prelude::*;
-
+use std::sync::Arc;
 use std::{cell::RefCell, fs, rc::Rc};
 const BATCH_SIZE: usize = 500;
 
+#[derive(Debug)]
 pub struct TrainDataItem(
     StateTensor,   /* 4x15x15 state */
     SquaredMatrix, /* 15*15 prob per position */
     f32,           /* winner */
 );
 
+pub struct DataProducer {
+    tx: UnboundedSender<TrainDataItem>,
+    encoded_params: Arc<Mutex<String>>,
+}
+
 pub struct Trainer {
     model: Rc<RefCell<PolicyValueModel>>,
-    data_buffer: Vec<TrainDataItem>,
     epochs: usize, // num of train_steps for each update
     kl_targ: f32,
     learn_rate: f32,
     lr_multiplier: f32, // adaptively adjust the learning rate based on KL
+}
+
+const export_dir: &str = "/Users/jerry/projects/renju/renju.git/game/renju_15x15_model/";
+impl DataProducer {
+    fn run(self: &mut Self) {
+        let model = get_best_model();
+        let model = Rc::new(RefCell::new(model));
+
+        let mut loaded_encoded_params = String::new();
+        loop {
+            let current_encoded_params = {
+                let data = self.encoded_params.lock().unwrap();
+                data.clone()
+            };
+            if !loaded_encoded_params.eq_ignore_ascii_case(&current_encoded_params) {
+                model
+                    .borrow()
+                    .import(&current_encoded_params)
+                    .expect("Unable to import");
+                loaded_encoded_params = current_encoded_params;
+                //println!("Loaded new parameters");
+            }
+
+            let (mut black_player, mut white_player) = SelfPlayer::new_pair(model.clone());
+            let state = Match::new(&mut black_player, &mut white_player).play_to_end();
+            let score = match &state {
+                TerminalState::BlackWon => 1f32,
+                TerminalState::WhiteWon => -1f32,
+                TerminalState::Draw => 0f32,
+                _ => unreachable!(),
+            };
+            black_player.consume(|state_tensor: StateTensor, prob_matrix: SquaredMatrix| {
+                self.tx
+                    .send(TrainDataItem(state_tensor, prob_matrix, score))
+                    .expect("Failed to send");
+            });
+            let score = match &state {
+                TerminalState::BlackWon => -1f32,
+                TerminalState::WhiteWon => 1f32,
+                TerminalState::Draw => 0f32,
+                _ => unreachable!(),
+            };
+            white_player.consume(|state_tensor: StateTensor, prob_matrix: SquaredMatrix| {
+                self.tx
+                    .send(TrainDataItem(state_tensor, prob_matrix, score))
+                    .expect("Failed to send");
+            });
+        }
+    }
 }
 
 impl Trainer {
@@ -26,7 +83,6 @@ impl Trainer {
 
         Self {
             model: m,
-            data_buffer: Vec::with_capacity(1000),
             epochs: 5,
             learn_rate: 2e-3,
             lr_multiplier: 1f32,
@@ -35,12 +91,31 @@ impl Trainer {
     }
 
     pub fn execute(self: &mut Self) {
-        fs::create_dir_all("checkpoints").expect("Unable to create directory");
-        let mut round = 0;
-        loop {
-            self.collect_data();
+        let (tx, mut rx) = mpsc::unbounded_channel::<TrainDataItem>();
 
-            while self.data_buffer.len() > BATCH_SIZE as usize {
+        let mut params = Arc::new(Mutex::new(String::new()));
+        let _join_handles: Vec<_> = (0..5)
+            .into_iter()
+            .map(|_| (tx.clone(), params.clone()))
+            .map(|(cloned_tx, cloned_params)| {
+                task::spawn_blocking(move || {
+                    let mut producer = DataProducer {
+                        tx: cloned_tx,
+                        encoded_params: cloned_params,
+                    };
+                    producer.run();
+                })
+            })
+            .collect();
+
+        let mut data_buffer = Vec::<TrainDataItem>::with_capacity(5000);
+
+        loop {
+            while let Ok(item) = rx.try_recv() {
+                data_buffer.push(item);
+            }
+
+            if data_buffer.len() > BATCH_SIZE * 2 {
                 let mut state_tensor_batch = [StateTensor::<f32>::default(); BATCH_SIZE];
                 let mut mcts_probs_batch = [SquaredMatrix::<f32>::default(); BATCH_SIZE];
                 let mut winner_batch = [0f32; BATCH_SIZE];
@@ -48,9 +123,9 @@ impl Trainer {
                 // randomly pick a batch
                 let mut count = 0;
                 while count < BATCH_SIZE {
-                    let index = rand::random::<usize>() % self.data_buffer.len();
+                    let index = rand::random::<usize>() % data_buffer.len();
                     let TrainDataItem(state_tensor, prob_tensor, winner) =
-                        self.data_buffer.swap_remove(index);
+                        data_buffer.swap_remove(index);
 
                     state_tensor_batch[count] = state_tensor;
                     mcts_probs_batch[count] = prob_tensor;
@@ -113,53 +188,29 @@ impl Trainer {
                 } else if kl < self.kl_targ / 2f32 && self.lr_multiplier < 10f32 {
                     self.lr_multiplier *= 1.5f32;
                 }
-                /*
-                let filename = format!("checkpoints/{}.ckpt", round);
-                round += 1;
 
-                self.model
-                    .borrow()
-                    .save(&filename)
-                    .expect("Unable to save checkpoint");*/
-                self.model
+                let updated_params = self
+                    .model
                     .borrow()
                     .save("best.ckpt")
                     .expect("Unable to save checkpoint");
+
+                {
+                    let data = &mut params.lock().unwrap();
+                    data.replace_range(.., &updated_params);
+                }
+            } else {
+                let ten_millis = std::time::Duration::from_millis(10);
+                std::thread::sleep(ten_millis);
             }
         }
-    }
-
-    fn collect_data(self: &mut Self) {
-        let (mut black_player, mut white_player) = SelfPlayer::new_pair(self.model.clone());
-        let state = Match::new(&mut black_player, &mut white_player).play_to_end();
-        let score = match &state {
-            TerminalState::BlackWon => 1f32,
-            TerminalState::WhiteWon => -1f32,
-            TerminalState::Draw => 0f32,
-            _ => unreachable!(),
-        };
-        black_player.consume(|state_tensor: StateTensor, prob_matrix: SquaredMatrix| {
-            self.data_buffer
-                .push(TrainDataItem(state_tensor, prob_matrix, score));
-        });
-        let score = match &state {
-            TerminalState::BlackWon => -1f32,
-            TerminalState::WhiteWon => 1f32,
-            TerminalState::Draw => 0f32,
-            _ => unreachable!(),
-        };
-        white_player.consume(|state_tensor: StateTensor, prob_matrix: SquaredMatrix| {
-            self.data_buffer
-                .push(TrainDataItem(state_tensor, prob_matrix, score));
-        });
     }
 }
 
 fn get_best_model() -> PolicyValueModel {
-    let export_dir = "/Users/jerry/projects/renju/renju.git/game/renju_15x15_model/";
-
     let ai_model = PolicyValueModel::load(export_dir).expect("Unable to load model");
-
+    let encoded_str = ai_model.export().expect("Unable to export");
+    ai_model.import(&encoded_str).expect("Failed to import");
     let checkpoint_filename = "best.ckpt";
     if fs::metadata(checkpoint_filename).is_ok() {
         match ai_model.restore(checkpoint_filename) {

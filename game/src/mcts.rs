@@ -6,12 +6,12 @@ use std::{
     rc::{Rc, Weak},
 };
 
-#[allow(dead_code)]
 pub struct TreeNode {
     action: Option<(usize, usize)>,
     parent: Option<Weak<RefCell<TreeNode>>>, // None if this is a root node
     children: HashMap<(usize /*row*/, usize /*col*/), Rc<RefCell<TreeNode>>>,
     current: Option<Weak<RefCell<TreeNode>>>,
+    stones: u32,      // number of stones on board without couting this node
     visit_times: u32, // number of visited times
     probability: f32, // prior probability from policy network
 
@@ -32,6 +32,7 @@ impl TreeNode {
             parent: None,
             children: HashMap::new(),
             current: None,
+            stones: 0,
             visit_times: 0,
             probability: probability,
             q: 0f32,
@@ -48,6 +49,7 @@ impl TreeNode {
             parent: None,
             children: HashMap::new(),
             current: None,
+            stones: 0,
             visit_times: 0,
             probability: probability,
             q: 0f32,
@@ -73,6 +75,11 @@ impl TreeNode {
     fn append_child(self: &mut TreeNode, pos: (usize, usize), child: Rc<RefCell<TreeNode>>) {
         assert!(self.current.is_some());
         // link child node to this one
+        {
+            let mut node = child.borrow_mut();
+            node.parent = Some(self.current.as_ref().unwrap().clone());
+            node.stones = self.stones + 1;
+        }
         child.borrow_mut().parent = Some(self.current.as_ref().unwrap().clone());
         self.children.insert(pos, child);
     }
@@ -93,7 +100,7 @@ impl TreeNode {
     // leaf_value: the value of subtree evaluation from the current player's perspective.
     pub fn update(self: &mut TreeNode, leaf_value: f32) {
         self.visit_times += 1;
-        // q is the avarage value in visit_times, initially q is zero
+        // q is the avarage score(evaluabl) in visit_times, initially q is zero
         // q = sum(value) / n
         // Progressive update : new_q = (value - old_q) / n + old_q
         self.q += 1.0 * (leaf_value - self.q) / (self.visit_times as f32);
@@ -154,6 +161,19 @@ impl TreeNode {
 
         selected_pair
     }
+
+    #[allow(dead_code)]
+    pub fn get_q(self: &Self) -> f32 {
+        self.q
+    }
+    #[allow(dead_code)]
+    pub fn get_action(self: &Self) -> Option<(usize, usize)> {
+        self.action
+    }
+    #[allow(dead_code)]
+    pub fn get_child(self: &Self, pos: (usize, usize)) -> Option<Rc<RefCell<TreeNode>>> {
+        self.children.get(&pos).and_then(|x| Some(x.clone()))
+    }
 }
 
 // Monte Carlo tree search
@@ -179,8 +199,12 @@ where
             iterations: iterations,
         }
     }
+    #[allow(dead_code)]
+    pub fn get_root(self: &Self) -> Rc<RefCell<TreeNode>> {
+        self.root.clone()
+    }
 
-    fn rollout(self: &mut Self, mut board: RenjuBoard, choices: &Vec<(usize, usize)>) {
+    pub fn rollout(self: &mut Self, mut board: RenjuBoard, choices: &Vec<(usize, usize)>) {
         let mut node = self.root.clone();
         assert_eq!(board.get_last_move(), node.borrow().action);
 
@@ -372,17 +396,5 @@ impl TreeNode {
             }
         }
         unreachable!("Current node must exists");
-    }
-}
-
-// for integration test only
-#[cfg(test)]
-#[allow(dead_code)]
-impl<M> MonteCarloTree<M>
-where
-    M: RenjuModel,
-{
-    pub fn get_root(self: &Self) -> Rc<RefCell<TreeNode>> {
-        self.root.clone()
     }
 }

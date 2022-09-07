@@ -1,6 +1,8 @@
 use bytemuck::cast_slice;
 use ndarray::prelude::*;
 use ndarray::{Array, OwnedRepr};
+use std::fs::OpenOptions;
+use std::io::prelude::*;
 use tensorflow::Graph;
 use tensorflow::Operation;
 use tensorflow::SavedModelBundle;
@@ -63,12 +65,15 @@ pub struct PolicyValueModel {
     train_input_score_batch: Operation,
     train_input_lr: Operation,
     train_output: Operation,
-    export_input: Operation,
-    export_output: Operation,
+    save_input: Operation,
+    save_output: Operation,
     restore_input: Operation,
     restore_output: Operation,
     random_choose_with_dirichlet_noice_input: Operation,
     random_choose_with_dirichlet_noice_output: Operation,
+    export_output: Operation,
+    import_input: Operation,
+    import_output: Operation,
 }
 
 impl PolicyValueModel {
@@ -141,20 +146,20 @@ impl PolicyValueModel {
             .expect("Unable to find `output_0` op in concreate function `train`");
 
         // save
-        let export_signature = bundle
+        let save_signature = bundle
             .meta_graph_def()
             .get_signature("save")
             .expect("Unable to find concreate function `save`");
-        let inputs_info = export_signature
+        let inputs_info = save_signature
             .get_input("checkpoint_path")
             .expect("Unable to find `checkpoint_path` in concreate function `save`");
-        let outputs_info = export_signature
+        let outputs_info = save_signature
             .get_output("output_0")
             .expect("Unable to find `output_0` in concreate function `save`");
-        let export_input_op = graph
+        let save_input_op = graph
             .operation_by_name_required(&inputs_info.name().name)
             .expect("Unable to find `checkpoint_path` op in concreate function `save`");
-        let export_output_op = graph
+        let save_output_op = graph
             .operation_by_name_required(&outputs_info.name().name)
             .expect("Unable to find `output_0` in concreate function `save`");
 
@@ -196,7 +201,37 @@ impl PolicyValueModel {
             "Unable to find `output_0` in concreate function `random_choose_with_dirichlet_noice`",
         );
 
-        Ok(Self {
+        // export
+        let export_signature = bundle
+            .meta_graph_def()
+            .get_signature("export_param")
+            .expect("Unable to find concreate function `export_param`");
+        let export_output_info = export_signature
+            .get_output("output_0")
+            .expect("Unable to find `output_0` in concreate function `export_param`");
+        let export_output_op = graph
+            .operation_by_name_required(&export_output_info.name().name)
+            .expect("Unable to find `output_0` in concreate function `export_param`");
+
+        // import
+        let import_signature = bundle
+            .meta_graph_def()
+            .get_signature("import_param")
+            .expect("Unable to find concreate function `import_param`");
+        let import_inputs_info = import_signature
+            .get_input("encoded_str")
+            .expect("Unable to find `encoded_str` in concreate function `import_param`");
+        let import_output_info = import_signature
+            .get_output("output_0")
+            .expect("Unable to find `output_0` in concreate function `import_param`");
+        let import_input_op = graph
+            .operation_by_name_required(&import_inputs_info.name().name)
+            .expect("Unable to find `encoded_str` op in concreate function `import_param`");
+        let import_output_op = graph
+            .operation_by_name_required(&import_output_info.name().name)
+            .expect("Unable to find `output_0` in concreate function `import_param`");
+
+        let model = Self {
             graph: graph,
             bundle: bundle,
             predict_input: predict_input_op,
@@ -206,33 +241,61 @@ impl PolicyValueModel {
             train_input_score_batch,
             train_input_lr: train_input_lr,
             train_output: train_output,
-            export_input: export_input_op,
-            export_output: export_output_op,
+            save_input: save_input_op,
+            save_output: save_output_op,
             restore_input: restore_input_op,
             restore_output: restore_output_op,
             random_choose_with_dirichlet_noice_input: random_choose_with_dirichlet_noice_input_op,
             random_choose_with_dirichlet_noice_output: random_choose_with_dirichlet_noice_output_op,
-        })
+            export_output: export_output_op,
+            import_input: import_input_op,
+            import_output: import_output_op,
+        };
+
+        Ok(model)
     }
 
-    pub fn save(self: &Self, filename: &str) -> Result<(), Status> {
+    pub fn save(self: &Self, filename: &str) -> Result<String, std::io::Error> {
+        let mut file = OpenOptions::new()
+            .read(false)
+            .write(true)
+            .truncate(true)
+            .create(true)
+            .open(filename)?;
+
+        let content = self.export().expect("Unable to export");
+        file.write_all(content.as_bytes())?;
+        /*
         let file_path_tensor: Tensor<String> = Tensor::from(String::from(filename));
 
         // Save the model.
         let mut step = SessionRunArgs::new();
-        step.add_feed(&self.export_input, 0, &file_path_tensor);
-        step.add_target(&self.export_output);
-        self.bundle.session.run(&mut step)
+        step.add_feed(&self.save_input, 0, &file_path_tensor);
+        step.add_target(&self.save_output);
+        self.bundle.session.run(&mut step)*/
+        Ok(content)
     }
 
-    pub fn restore(self: &Self, filename: &str) -> Result<(), Status> {
-        let file_path_tensor: Tensor<String> = Tensor::from(String::from(filename));
+    pub fn restore(self: &Self, filename: &str) -> Result<(), std::io::Error> {
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(false)
+            .truncate(false)
+            .create(false)
+            .open(filename)?;
+
+        let mut content = String::new();
+        file.read_to_string(&mut content)?;
+
+        self.import(&content).expect("Unable to import");
+
+        Ok(())
 
         // Save the model.
-        let mut step = SessionRunArgs::new();
-        step.add_feed(&self.restore_input, 0, &file_path_tensor);
-        step.add_target(&self.restore_output);
-        self.bundle.session.run(&mut step)
+        //let mut step = SessionRunArgs::new();
+        //step.add_feed(&self.restore_input, 0, &file_path_tensor);
+        //step.add_target(&self.restore_output);
+        //.bundle.session.run(&mut step)
     }
 
     pub fn random_choose_with_dirichlet_noice(
@@ -261,6 +324,30 @@ impl PolicyValueModel {
             return Ok(index as usize);
         }
         unreachable!("Index must be in the range of probabilities")
+    }
+
+    pub fn export(self: &Self) -> Result<String, Status> {
+        // Save the model.
+        let mut step = SessionRunArgs::new();
+        step.add_target(&self.export_output);
+
+        let fetch_token = step.request_fetch(&self.export_output, 0);
+
+        self.bundle.session.run(&mut step)?;
+
+        let tensor = step.fetch::<String>(fetch_token)?;
+        let text = tensor.to_string();
+        Ok(text.trim_matches('"').to_string())
+    }
+
+    pub fn import(self: &Self, encoded_str: &str) -> Result<(), Status> {
+        let tensor: Tensor<String> = Tensor::from(String::from(encoded_str));
+
+        // Save the model.
+        let mut step = SessionRunArgs::new();
+        step.add_feed(&self.import_input, 0, &tensor);
+        step.add_target(&self.import_output);
+        self.bundle.session.run(&mut step)
     }
 }
 
