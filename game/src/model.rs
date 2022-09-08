@@ -263,6 +263,7 @@ impl PolicyValueModel {
             .create(true)
             .open(filename)?;
 
+        //let content = String::new();
         let content = self.export().expect("Unable to export");
         file.write_all(content.as_bytes())?;
         /*

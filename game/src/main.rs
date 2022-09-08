@@ -27,7 +27,7 @@ static EXPORT_DATASET_HELP_TEXT: &str = "
 Export matches into training dataset
 ";
 
-/// File Scanner
+/// Renju Game
 #[derive(Parser, Debug)]
 #[clap(author, version, about = ABOUT_TEXT, long_about = Some(ABOUT_TEXT), trailing_var_arg=true)]
 struct Arguments {

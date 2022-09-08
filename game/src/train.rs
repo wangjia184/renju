@@ -209,8 +209,6 @@ impl Trainer {
 
 fn get_best_model() -> PolicyValueModel {
     let ai_model = PolicyValueModel::load(export_dir).expect("Unable to load model");
-    let encoded_str = ai_model.export().expect("Unable to export");
-    ai_model.import(&encoded_str).expect("Failed to import");
     let checkpoint_filename = "best.ckpt";
     if fs::metadata(checkpoint_filename).is_ok() {
         match ai_model.restore(checkpoint_filename) {

@@ -4,7 +4,7 @@ An implementation of the policyValueNet in Tensorflow V2
 Author : Jerry.Wang  vcer#qq.com
 """
 
-from cProfile import label
+
 import tensorflow as tf
 import tensorflow_probability as tfp
 
@@ -196,15 +196,13 @@ def create_model(board_width, board_height):
         @tf.function
         def export_param(self):
             args = []
-            for var in self.model.trainable_variables:
-                args.append( tf.strings.join( [var.name,
-                    tf.io.encode_base64(tf.io.serialize_tensor(var.read_value()))]
+            
+            for weight in self.model.weights:
+                args.append( tf.strings.join( [weight.name,
+                    tf.io.encode_base64(tf.io.serialize_tensor(weight.read_value()))]
                     , ">"))
-
             
             encoded_str = tf.strings.join(args, "!")
-            #tf.print(encoded_str)
-            # https://www.tensorflow.org/api_docs/python/tf/strings
             return encoded_str
 
 
@@ -215,10 +213,10 @@ def create_model(board_width, board_height):
                 pair = tf.strings.split( arg, sep=tf.convert_to_tensor('>'))
                 tensor_value = tf.io.parse_tensor(tf.io.decode_base64(pair[1]), out_type=tf.float32)
                 
-                for var in self.model.trainable_variables:
-                    if tf.math.equal( tf.convert_to_tensor(var.name), pair[0]):
-                        var.assign(tensor_value)
-                        #tf.print( var.name, "Assigned")
+                for weight in self.model.weights:
+                    if tf.math.equal( tf.convert_to_tensor(weight.name), pair[0]):
+                        weight.assign(tensor_value)
+                        #tf.print( weight.name, "Assigned")
                 
             return encoded_str
             
@@ -254,18 +252,22 @@ def create_model(board_width, board_height):
     return RenjuModel()
 
 
-model = create_model( 15, 15)
+renju = create_model( 15, 15)
 
+def save_model(folder_name):
+    #Saving the model, explictly adding the concrete functions as signatures
+    renju.model.save(folder_name, 
+            save_format='tf', 
+            overwrite=True,
+            include_optimizer=True,
+            signatures={
+                'predict': renju.predict.get_concrete_function(), 
+                'train' : renju.train.get_concrete_function(), 
+                'save' : renju.save.get_concrete_function(),
+                'restore' : renju.restore.get_concrete_function(),
+                'random_choose_with_dirichlet_noice' : renju.random_choose_with_dirichlet_noice.get_concrete_function(),
+                'export_param' : renju.export_param.get_concrete_function(),
+                'import_param' : renju.import_param.get_concrete_function(),
+            })
 
-#Saving the model, explictly adding the concrete functions as signatures
-model.model.save('renju_15x15_model', 
-        save_format='tf', 
-        signatures={
-            'predict': model.predict.get_concrete_function(), 
-            'train' : model.train.get_concrete_function(), 
-            'save' : model.save.get_concrete_function(),
-            'restore' : model.restore.get_concrete_function(),
-            'random_choose_with_dirichlet_noice' : model.random_choose_with_dirichlet_noice.get_concrete_function(),
-            'export_param' : model.export_param.get_concrete_function(),
-            'import_param' : model.import_param.get_concrete_function(),
-        })
+save_model('renju_15x15_model')

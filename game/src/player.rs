@@ -90,7 +90,7 @@ pub struct SelfPlayer {
 impl SelfPlayer {
     pub fn new_pair(model: Rc<RefCell<PolicyValueModel>>) -> (Self, Self) {
         let tree = Rc::new(RefCell::new(MonteCarloTree::new(
-            1f32,
+            3f32,
             500u32,
             model.clone(),
         )));
