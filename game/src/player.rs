@@ -90,7 +90,7 @@ pub struct SelfPlayer {
 impl SelfPlayer {
     pub fn new_pair(model: Rc<RefCell<PolicyValueModel>>) -> (Self, Self) {
         let tree = Rc::new(RefCell::new(MonteCarloTree::new(
-            3f32,
+            5f32,
             500u32,
             model.clone(),
         )));
@@ -121,17 +121,13 @@ impl SelfPlayer {
         let mut pairs = Cow::from(move_prob_pairs);
         while pairs.len() > 1 {
             // determine the position to move
-            let mut probability_tensor = Tensor::<f32>::new(&[pairs.len() as u64]);
-            pairs
-                .iter()
-                .enumerate()
-                .for_each(|(index, (_, probability))| {
-                    probability_tensor[index] = *probability;
-                });
+
+            let vector: Vec<_> = pairs.iter().map(|(_, probability)| *probability).collect();
+
             let index = self
                 .model
                 .borrow()
-                .random_choose_with_dirichlet_noice(&probability_tensor)
+                .random_choose_with_dirichlet_noice(&vector)
                 .expect("random_choose_with_dirichlet_noice failed");
 
             let pos = pairs[index].0;

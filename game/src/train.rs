@@ -1,52 +1,76 @@
-use crate::*;
-use ndarray::{prelude::*, Data};
-use std::sync::Mutex;
-use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use tokio::task;
-
+use bytemuck::cast_slice;
+use bytes::Bytes;
+use ndarray::Array;
+use serde::{Deserialize, Serialize};
+use std::fs::OpenOptions;
+use std::io::prelude::*;
 use std::sync::Arc;
-use std::{cell::RefCell, fs, rc::Rc};
-const BATCH_SIZE: usize = 500;
+use std::sync::Mutex;
+use std::time::Instant;
+use std::{cell::RefCell, rc::Rc};
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use tokio::sync::watch::Sender;
 
-#[derive(Debug)]
+use crate::game::*;
+use crate::model::*;
+use crate::player::*;
+
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct TrainDataItem(
     StateTensor,   /* 4x15x15 state */
     SquaredMatrix, /* 15*15 prob per position */
     f32,           /* winner */
 );
 
+impl Into<Bytes> for TrainDataItem {
+    fn into(self) -> Bytes {
+        let buffer: Vec<u8> = bincode::serialize(&self).unwrap();
+        Bytes::from(buffer)
+    }
+}
+
+impl From<Bytes> for TrainDataItem {
+    fn from(bytes: Bytes) -> Self {
+        let instance: Self = bincode::deserialize(&bytes).expect("Unable to deserialize");
+        instance
+    }
+}
+
 pub struct DataProducer {
     tx: UnboundedSender<TrainDataItem>,
-    encoded_params: Arc<Mutex<String>>,
+    latest_parameters: Arc<Mutex<Option<Bytes>>>,
 }
 
-pub struct Trainer {
-    model: Rc<RefCell<PolicyValueModel>>,
-    epochs: usize, // num of train_steps for each update
-    kl_targ: f32,
-    learn_rate: f32,
-    lr_multiplier: f32, // adaptively adjust the learning rate based on KL
-}
-
-const export_dir: &str = "/Users/jerry/projects/renju/renju.git/game/renju_15x15_model/";
 impl DataProducer {
-    fn run(self: &mut Self) {
+    pub fn new() -> (
+        Self,
+        UnboundedReceiver<TrainDataItem>,
+        Arc<Mutex<Option<Bytes>>>,
+    ) {
+        let latest_parameters = Arc::new(Mutex::new(None));
+        let (tx, rx) = mpsc::unbounded_channel::<TrainDataItem>();
+        (
+            Self {
+                tx: tx,
+                latest_parameters: latest_parameters.clone(),
+            },
+            rx,
+            latest_parameters,
+        )
+    }
+    pub fn run(self: &mut Self) {
         let model = get_best_model();
         let model = Rc::new(RefCell::new(model));
 
-        let mut loaded_encoded_params = String::new();
         loop {
-            let current_encoded_params = {
-                let data = self.encoded_params.lock().unwrap();
-                data.clone()
-            };
-            if !loaded_encoded_params.eq_ignore_ascii_case(&current_encoded_params) {
-                model
-                    .borrow()
-                    .import(&current_encoded_params)
-                    .expect("Unable to import");
-                loaded_encoded_params = current_encoded_params;
-                //println!("Loaded new parameters");
+            let option = self.latest_parameters.lock().unwrap().take();
+            if let Some(latest_parameter) = option {
+                if latest_parameter.len() > 0 {
+                    model
+                        .borrow()
+                        .import(latest_parameter)
+                        .expect("Unable to import parameter");
+                }
             }
 
             let (mut black_player, mut white_player) = SelfPlayer::new_pair(model.clone());
@@ -77,52 +101,52 @@ impl DataProducer {
     }
 }
 
+pub struct Trainer {
+    payload_sender: Sender<Bytes>, // broadcast latest parameters
+    data_receiver: UnboundedReceiver<TrainDataItem>, // reveice train data set
+    model: PolicyValueModel,
+    epochs: usize, // num of train_steps for each update
+    kl_targ: f32,
+    learn_rate: f32,
+    lr_multiplier: f32, // adaptively adjust the learning rate based on KL
+    batch_size: usize,
+}
+
 impl Trainer {
-    pub fn new() -> Self {
-        let m = Rc::new(RefCell::new(get_best_model()));
+    pub fn new(payload_sender: Sender<Bytes>, rx: UnboundedReceiver<TrainDataItem>) -> Self {
+        let m = get_best_model();
+
+        let payload = m.export().expect("Unable to export parameters");
+        payload_sender.send(payload).expect("Failed to set payload");
 
         Self {
+            payload_sender: payload_sender,
+            data_receiver: rx,
             model: m,
             epochs: 5,
             learn_rate: 2e-3,
             lr_multiplier: 1f32,
             kl_targ: 0.02f32,
+            batch_size: 500,
         }
     }
 
-    pub fn execute(self: &mut Self) {
-        let (tx, mut rx) = mpsc::unbounded_channel::<TrainDataItem>();
-
-        let mut params = Arc::new(Mutex::new(String::new()));
-        let _join_handles: Vec<_> = (0..5)
-            .into_iter()
-            .map(|_| (tx.clone(), params.clone()))
-            .map(|(cloned_tx, cloned_params)| {
-                task::spawn_blocking(move || {
-                    let mut producer = DataProducer {
-                        tx: cloned_tx,
-                        encoded_params: cloned_params,
-                    };
-                    producer.run();
-                })
-            })
-            .collect();
-
+    pub async fn run(self: &mut Self) {
         let mut data_buffer = Vec::<TrainDataItem>::with_capacity(5000);
 
         loop {
-            while let Ok(item) = rx.try_recv() {
+            while let Ok(item) = self.data_receiver.try_recv() {
                 data_buffer.push(item);
             }
 
-            if data_buffer.len() > BATCH_SIZE * 2 {
-                let mut state_tensor_batch = [StateTensor::<f32>::default(); BATCH_SIZE];
-                let mut mcts_probs_batch = [SquaredMatrix::<f32>::default(); BATCH_SIZE];
-                let mut winner_batch = [0f32; BATCH_SIZE];
+            if data_buffer.len() > self.batch_size * 2 {
+                let mut state_tensor_batch = vec![StateTensor::<f32>::default(); self.batch_size];
+                let mut mcts_probs_batch = vec![SquaredMatrix::<f32>::default(); self.batch_size];
+                let mut winner_batch = vec![0f32; self.batch_size];
 
                 // randomly pick a batch
                 let mut count = 0;
-                while count < BATCH_SIZE {
+                while count < self.batch_size {
                     let index = rand::random::<usize>() % data_buffer.len();
                     let TrainDataItem(state_tensor, prob_tensor, winner) =
                         data_buffer.swap_remove(index);
@@ -134,12 +158,14 @@ impl Trainer {
                     count += 1;
                 }
 
-                let (old_log_probs, old_value) = self
+                let now = Instant::now();
+                let (old_log_prob_matrix, old_value) = self
                     .model
-                    .borrow()
-                    .predict(&state_tensor_batch)
+                    .predict(&state_tensor_batch, true)
                     .expect("Failed to predict");
 
+                let slice: &[f32] = cast_slice(&old_log_prob_matrix);
+                let old_log_probs = Array::from_vec(slice.to_vec());
                 let old_probs = old_log_probs.mapv(f32::exp);
 
                 let mut kl: f32 = 0f32;
@@ -148,7 +174,6 @@ impl Trainer {
                 for _ in 0..self.epochs {
                     (loss, entropy) = self
                         .model
-                        .borrow()
                         .train(
                             &state_tensor_batch,
                             &mcts_probs_batch,
@@ -157,16 +182,20 @@ impl Trainer {
                         )
                         .expect("Failed to train");
 
-                    let (new_log_probs, new_value) = self
+                    let (new_log_prob_matrix, new_value) = self
                         .model
-                        .borrow()
-                        .predict(&state_tensor_batch)
+                        .predict(&state_tensor_batch, true)
                         .expect("Failed to predict");
+
+                    let new_log_probs = Array::from_vec(new_log_prob_matrix.to_vec());
+
+                    let slice: &[f32] = cast_slice(&new_log_prob_matrix);
+                    let new_log_probs = Array::from_vec(slice.to_vec());
 
                     // https://docs.rs/ndarray/latest/ndarray/doc/ndarray_for_numpy_users/index.html
                     // kl = np.mean(np.sum(old_probs * (old_log_probs - new_log_probs), axis=1))
-                    let x = &old_probs * (&old_log_probs - new_log_probs);
-                    kl = x.index_axis(Axis(0), 0).sum_axis(Axis(1)).mean().unwrap();
+                    let diff = &old_probs * (&old_log_probs - &new_log_probs);
+                    kl = diff.sum();
                     //kl = x.sum_axis(Axis(2)).mean().unwrap();
 
                     if kl > self.kl_targ * 4f32 {
@@ -174,12 +203,15 @@ impl Trainer {
                     }
                 }
 
+                let elapsed = now.elapsed();
+
                 println!(
-                    "lr={}; loss={}; entropy={}; kl={}",
+                    "lr={}; loss={}; entropy={}; kl={}; elapsed={:.2?}",
                     self.learn_rate * self.lr_multiplier,
                     loss,
                     entropy,
-                    kl
+                    kl,
+                    elapsed
                 );
 
                 // adaptively adjust the learning rate
@@ -189,40 +221,59 @@ impl Trainer {
                     self.lr_multiplier *= 1.5f32;
                 }
 
-                let updated_params = self
-                    .model
-                    .borrow()
-                    .save("best.ckpt")
-                    .expect("Unable to save checkpoint");
+                let parameters = self.model.export().expect("Unable to export");
 
                 {
-                    let data = &mut params.lock().unwrap();
-                    data.replace_range(.., &updated_params);
+                    let mut file = OpenOptions::new()
+                        .read(false)
+                        .write(true)
+                        .truncate(true)
+                        .create(true)
+                        .open("best.ckpt")
+                        .expect("Unable to open file");
+                    file.write_all(&parameters).expect("Unable to write file");
                 }
+
+                self.payload_sender
+                    .send(parameters)
+                    .expect("Unable to send");
             } else {
-                let ten_millis = std::time::Duration::from_millis(10);
-                std::thread::sleep(ten_millis);
+                match self.data_receiver.recv().await {
+                    Some(item) => {
+                        data_buffer.push(item);
+                    }
+                    None => {
+                        println!("data_receiver is closed");
+                        return;
+                    }
+                }
             }
         }
     }
 }
 
 fn get_best_model() -> PolicyValueModel {
-    let ai_model = PolicyValueModel::load(export_dir).expect("Unable to load model");
-    let checkpoint_filename = "best.ckpt";
-    if fs::metadata(checkpoint_filename).is_ok() {
-        match ai_model.restore(checkpoint_filename) {
-            Err(e) => {
-                println!(
-                    "WARNING : Unable to restore checkpoint {}. {}",
-                    checkpoint_filename, e
-                );
-            }
-            _ => {
-                println!("Successfully loaded checkpoint {}", checkpoint_filename);
+    let renju_model = PolicyValueModel::new("/Users/jerry/projects/renju/renju.git/game/model.py")
+        .expect("Unable to load model");
+
+    if let Ok(mut file) = OpenOptions::new()
+        .read(true)
+        .write(false)
+        .truncate(false)
+        .create(false)
+        .open("best.ckpt")
+    {
+        let mut buffer = Vec::<u8>::with_capacity(100000);
+        if let Ok(size) = file.read_to_end(&mut buffer) {
+            if size > 0 {
+                if let Err(e) = renju_model.import(Bytes::from(buffer)) {
+                    println!("Unable to import parameters. {}", e);
+                } else {
+                    println!("Imported parameters");
+                }
             }
         }
     }
 
-    ai_model
+    renju_model
 }

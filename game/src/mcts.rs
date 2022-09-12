@@ -247,10 +247,10 @@ where
                 // Evaluate the leaf using a network
                 let state_tensor: [StateTensor; 1] = [board.get_state_tensor()];
 
-                let (log_action_tensor, score) = self
+                let (prob_matrix, score) = self
                     .model
                     .borrow()
-                    .predict(&state_tensor)
+                    .predict(&state_tensor, false)
                     .expect("Failed to predict");
 
                 // black and white are placed in turns
@@ -261,7 +261,7 @@ where
 
                 // extend children
                 for (row, col) in choices {
-                    let probability = log_action_tensor[[0, 0, row * board.width() + col]].exp();
+                    let probability = prob_matrix[row][col];
                     node.borrow_mut().create_child((row, col), probability);
                 }
             }

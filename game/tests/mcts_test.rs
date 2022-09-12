@@ -1,14 +1,11 @@
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::rc::Rc;
-
-use bytemuck::cast_slice;
-use ndarray::prelude::*;
-use ndarray::{Array, OwnedRepr};
+use bytes::Bytes;
+use pyo3::prelude::*;
 use renju_game::game::*;
 use renju_game::mcts::*;
 use renju_game::model::*;
-use tensorflow::Status;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
 
 pub struct MockedRenjuModel {
     map: RefCell<Option<HashMap<(usize, usize), f32>>>,
@@ -25,27 +22,23 @@ impl Default for MockedRenjuModel {
 }
 
 impl MockedRenjuModel {
-    fn generate_prob_matrix(self: &Self) -> ArrayBase<OwnedRepr<f32>, Dim<[usize; 3]>> {
-        let mut prob_matrix = [[1e-10f32.ln(); BOARD_SIZE]; BOARD_SIZE];
+    fn generate_prob_matrix(self: &Self) -> SquaredMatrix<f32> {
+        let mut prob_matrix = SquaredMatrix::default();
 
         let option = self.map.borrow_mut().take();
         assert!(option.is_some());
         option.unwrap().iter().for_each(|(pos, prob)| {
-            prob_matrix[pos.0][pos.1] = (*prob + 1e-10f32).ln();
+            prob_matrix[pos.0][pos.1] = *prob;
         });
-
-        let dim = Dim([1, 1, 15 * 15]);
-        let data: &[f32] = cast_slice(&prob_matrix);
-        let v = Vec::from(data);
-        let x = Array::from_shape_vec(dim, v).unwrap();
-        x
+        prob_matrix
     }
 }
 impl RenjuModel for MockedRenjuModel {
     fn predict(
         self: &Self,
         state_tensors: &[StateTensor],
-    ) -> Result<(ArrayBase<OwnedRepr<f32>, Dim<[usize; 3]>>, f32), Status> {
+        use_log_prob: bool, // true to return log probability
+    ) -> PyResult<(SquaredMatrix<f32>, f32)> {
         assert!(!state_tensors.is_empty());
 
         Ok((self.generate_prob_matrix(), self.score))
@@ -53,12 +46,24 @@ impl RenjuModel for MockedRenjuModel {
 
     fn train(
         self: &Self,
-        _: &[StateTensor],
-        _: &[SquaredMatrix],
-        _: &[f32],
-        _: f32,
-    ) -> Result<(f32 /*loss*/, f32 /*entropy*/), Status> {
+        state_tensors: &[StateTensor],
+        prob_matrixes: &[SquaredMatrix],
+        scores: &[f32],
+        lr: f32,
+    ) -> PyResult<(f32, f32)> {
         unimplemented!()
+    }
+
+    fn export(self: &Self) -> PyResult<Bytes> {
+        unimplemented!();
+    }
+
+    fn import(self: &Self, buffer: Bytes) -> PyResult<()> {
+        unimplemented!();
+    }
+
+    fn random_choose_with_dirichlet_noice(self: &Self, probs: &[f32]) -> PyResult<usize> {
+        unimplemented!();
     }
 }
 

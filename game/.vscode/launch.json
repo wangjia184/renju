@@ -44,11 +44,10 @@
                     "kind": "bin"
                 }
             },
-            "args": [],
-            "cwd": "${workspaceFolder}",
-            "env": {
-                "DYLD_LIBRARY_PATH": "/opt/homebrew/opt/tensorflow/lib"
-            }
+            "args": [
+                "train"
+            ],
+            "cwd": "${workspaceFolder}"
         },
         {
             "type": "lldb",
