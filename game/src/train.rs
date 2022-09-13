@@ -187,8 +187,6 @@ impl Trainer {
                         .predict(&state_tensor_batch, true)
                         .expect("Failed to predict");
 
-                    let new_log_probs = Array::from_vec(new_log_prob_matrix.to_vec());
-
                     let slice: &[f32] = cast_slice(&new_log_prob_matrix);
                     let new_log_probs = Array::from_vec(slice.to_vec());
 

@@ -26,7 +26,7 @@ def create_model(board_width, board_height):
             self.inputs = tf.keras.Input( shape=(4, board_height, board_width), dtype=tf.dtypes.float32, name="input")
 
             # convert from  NCHW(channels_first) to NHWC(channels_last) because channels_first is not supported by CPU
-            self.transposed_inputs = tf.keras.layers.Lambda( lambda x: tf.transpose(x, [0, 2, 3, 1]) )(self.inputs)
+            self.permuted_inputs = tf.keras.layers.Permute((2,3,1))(self.inputs)
 
 
             # 2. Common Networks Layers
@@ -37,7 +37,7 @@ def create_model(board_width, board_height):
                 data_format="channels_last",
                 activation=tf.keras.activations.relu,
                 kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta)
-                )(self.transposed_inputs)
+                )(self.permuted_inputs)
 
             self.conv2 = tf.keras.layers.Conv2D( name="conv2", 
                 filters=64, 
@@ -61,7 +61,6 @@ def create_model(board_width, board_height):
             self.action_conv = tf.keras.layers.Conv2D( name="action_conv",
                 filters=4,
                 kernel_size=(1, 1),
-                padding="same",
                 data_format="channels_last",
                 activation=tf.keras.activations.relu,
                 kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta)
@@ -82,7 +81,6 @@ def create_model(board_width, board_height):
             self.evaluation_conv = tf.keras.layers.Conv2D( name="evaluation_conv",
                 filters=2,
                 kernel_size=(1, 1),
-                padding="same",
                 data_format="channels_last",
                 activation=tf.keras.activations.relu,
                 kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta)
@@ -113,28 +111,6 @@ def create_model(board_width, board_height):
 
 
 
-
-         
-
-
-        @tf.function(input_signature=[tf.TensorSpec(shape=[None, 4, board_height, board_width],  dtype=tf.float32), 
-                                  tf.TensorSpec(shape=[None, 1, board_height * board_width],  dtype=tf.float32),
-                                  tf.TensorSpec(shape=[None, 1, 1],  dtype=tf.float32)])
-        def train(self, state_batch, prob_batch, score_batch):
-            
-            with tf.GradientTape() as tape:
-                predictions = self.model(state_batch, training=True)  # Forward pass
-                # the loss function is configured in `compile()`
-                loss = self.model.compiled_loss([prob_batch, score_batch], predictions, regularization_losses=self.model.losses)
- 
-            gradients = tape.gradient(loss, self.model.trainable_variables)
-            self.model.optimizer.apply_gradients(
-                zip(gradients, self.model.trainable_variables))
-
-            entropy = tf.negative(tf.reduce_mean(
-               tf.reduce_sum(tf.exp(predictions[0]) * predictions[0], 2)))
-
-            return (loss, entropy)
 
 
 
@@ -224,12 +200,26 @@ def train(state_batch, prob_batch, score_batch, lr):
     score_batch = tf.reshape(score_batch, [batch_size, 1])
 
     loss = renju.model.evaluate(state_batch, [prob_batch, score_batch], batch_size=batch_size, verbose=0)
-    action_probs, _ = renju.model.predict_on_batch(state_batch)
+    action_probs, pred_scores = renju.model.predict_on_batch(state_batch)
+
+    last = pred_scores[0]
+    index = 1
+    all_same = True
+    while index < batch_size:
+        current = pred_scores[index]
+        index = index + 1
+        if current != last:
+            all_same = False
+            break
+        else:
+            last = current
+    if all_same:
+        print( "WARNING: All scores are the same.", score_batch)
 
     entropy = -np.mean(np.sum(action_probs * np.log(action_probs + 1e-10), axis=1))
     
     renju.model.fit( state_batch, [prob_batch, score_batch], batch_size=batch_size)
-    return (loss[0] + loss[1], entropy)
+    return (loss[0], entropy)
 
 """infer and return the first input result (probability and score)"""
 def predict(state_batch):
@@ -257,21 +247,7 @@ def predict(state_batch):
                 last = current
         if all_same:
             print( "WARNING: All predictions are the same ")
-
-        last = scores[0]
-        index = 1
-        all_same = True
-        while index < batch_size:
-            current = scores[index]
-            index = index + 1
-            if current != last:
-                all_same = False
-                break
-            else:
-                last = current
-        if all_same:
-            print( "WARNING: All scores are the same.", scores)
-        
+       
 
     return probs[0].numpy().tolist(), scores[0][0].numpy()
 

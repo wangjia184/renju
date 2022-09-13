@@ -58,15 +58,15 @@ where
 
                 match state {
                     TerminalState::BlackWon => {
-                        //self.board.print();
+                        self.board.print();
                         return state;
                     }
                     TerminalState::WhiteWon => {
-                        //self.board.print();
+                        self.board.print();
                         return state;
                     }
                     TerminalState::Draw => {
-                        //self.board.print();
+                        self.board.print();
                         return state;
                     }
                     _ => continue,
