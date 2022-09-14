@@ -1,3 +1,10 @@
+
+#![cfg_attr(
+    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+  )]
+
+  
 extern crate clap;
 extern crate num_cpus;
 use bytes::Bytes;
@@ -89,6 +96,11 @@ async fn main() {
     let args = Arguments::parse();
 
     match args.verb {
+        _ => {
+            tauri::Builder::default()
+                .run(tauri::generate_context!())
+                .expect("error while running tauri application");
+        }
         Some(Verb::Produce { address }) => {
             println!("Connecting to {}", address);
             let mut stream = TcpStream::connect(address)
