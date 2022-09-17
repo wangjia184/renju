@@ -55,6 +55,33 @@ impl PolicyValueModel {
             Ok(Self { module: module })
         })
     }
+
+    pub fn get_best() -> Self {
+        let renju_model =
+            PolicyValueModel::new("/Users/jerry/projects/renju/renju.git/game/model.py")
+                .expect("Unable to load model");
+
+        if let Ok(mut file) = OpenOptions::new()
+            .read(true)
+            .write(false)
+            .truncate(false)
+            .create(false)
+            .open("best.ckpt")
+        {
+            let mut buffer = Vec::<u8>::with_capacity(100000);
+            if let Ok(size) = file.read_to_end(&mut buffer) {
+                if size > 0 {
+                    if let Err(e) = renju_model.import(Bytes::from(buffer)) {
+                        println!("Unable to import parameters. {}", e);
+                    } else {
+                        println!("Imported parameters");
+                    }
+                }
+            }
+        }
+
+        renju_model
+    }
 }
 
 impl RenjuModel for PolicyValueModel {

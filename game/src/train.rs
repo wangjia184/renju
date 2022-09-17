@@ -59,7 +59,7 @@ impl DataProducer {
         )
     }
     pub fn run(self: &mut Self) {
-        let model = get_best_model();
+        let model = PolicyValueModel::get_best();
         let model = Rc::new(RefCell::new(model));
 
         loop {
@@ -114,7 +114,7 @@ pub struct Trainer {
 
 impl Trainer {
     pub fn new(payload_sender: Sender<Bytes>, rx: UnboundedReceiver<TrainDataItem>) -> Self {
-        let m = get_best_model();
+        let m = PolicyValueModel::get_best();
 
         let payload = m.export().expect("Unable to export parameters");
         payload_sender.send(payload).expect("Failed to set payload");
@@ -248,30 +248,4 @@ impl Trainer {
             }
         }
     }
-}
-
-fn get_best_model() -> PolicyValueModel {
-    let renju_model = PolicyValueModel::new("/Users/jerry/projects/renju/renju.git/game/model.py")
-        .expect("Unable to load model");
-
-    if let Ok(mut file) = OpenOptions::new()
-        .read(true)
-        .write(false)
-        .truncate(false)
-        .create(false)
-        .open("best.ckpt")
-    {
-        let mut buffer = Vec::<u8>::with_capacity(100000);
-        if let Ok(size) = file.read_to_end(&mut buffer) {
-            if size > 0 {
-                if let Err(e) = renju_model.import(Bytes::from(buffer)) {
-                    println!("Unable to import parameters. {}", e);
-                } else {
-                    println!("Imported parameters");
-                }
-            }
-        }
-    }
-
-    renju_model
 }

@@ -184,19 +184,17 @@ where
     model: Rc<RefCell<M>>,
     c_puct: f32,
     root: Rc<RefCell<TreeNode>>,
-    iterations: u32,
 }
 
 impl<M> MonteCarloTree<M>
 where
     M: RenjuModel,
 {
-    pub fn new(c_puct: f32, iterations: u32, model: Rc<RefCell<M>>) -> Self {
+    pub fn new(c_puct: f32, model: Rc<RefCell<M>>) -> Self {
         Self {
             c_puct: c_puct,
             root: TreeNode::new(1f32),
             model: model,
-            iterations: iterations,
         }
     }
     #[allow(dead_code)]
@@ -294,15 +292,8 @@ where
     // temperature parameter in (0, 1] controls the level of exploration
     pub fn get_move_probability(
         self: &mut Self,
-        board: &RenjuBoard,
-        choices: &Vec<(usize, usize)>,
         temperature: f32,
     ) -> Vec<((usize, usize) /*pos*/, f32 /* probability */)> {
-        for _ in 0..self.iterations {
-            // TODO : avoid heap allocation, use stack only
-            self.rollout(board.clone(), choices);
-        }
-
         let mut max_log_visit_times = 0f32;
         // calc the move probabilities based on visit counts at the root node
         let pairs: Vec<_> = self
@@ -338,13 +329,16 @@ where
         pairs
     }
 
-    pub fn update_with_position(self: &mut Self, pos: (usize, usize)) -> usize {
-        let child = self
-            .root
-            .borrow_mut()
-            .children
-            .remove(&pos)
-            .expect("Child with specific position does not exist");
+    pub fn update_with_position(self: &mut Self, pos: (usize, usize)) {
+        let child = {
+            let mut r = self.root.borrow_mut();
+
+            r.children
+                .remove(&pos)
+                .or_else(|| Some(r.create_child(pos, 0f32)))
+                .unwrap()
+        };
+
         self.root.borrow_mut().children.clear(); // free all other children
         if let Ok(cell) = Rc::try_unwrap(child) {
             let mut node = cell.into_inner();
@@ -361,8 +355,6 @@ where
         } else {
             unreachable!("There must be only one strong reference to child node");
         }
-
-        self.root.borrow().children.len()
     }
 }
 

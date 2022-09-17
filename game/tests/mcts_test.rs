@@ -72,7 +72,7 @@ fn test_1() {
     let model = Rc::new(RefCell::new(MockedRenjuModel::default()));
     let mut board = RenjuBoard::default();
 
-    let mut tree = MonteCarloTree::new(5f32, 1, model.clone());
+    let mut tree = MonteCarloTree::new(5f32, model.clone());
     let choices = vec![(7, 7), (8, 8)];
     let mut map = HashMap::new();
     map.insert((7, 7), 1f32);

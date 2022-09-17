@@ -1,14 +1,12 @@
-
 #![cfg_attr(
     all(not(debug_assertions), target_os = "windows"),
     windows_subsystem = "windows"
-  )]
+)]
 
-  
 extern crate clap;
 extern crate num_cpus;
 use bytes::Bytes;
-use clap::{Args, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 
 use futures::SinkExt;
 use futures_util::stream::StreamExt;
@@ -16,18 +14,22 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::sync::watch::{self, Receiver};
+use tokio::time::{sleep, Duration};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
+
 mod game;
 mod mcts;
 mod player;
 mod storage;
 mod train;
-use game::{RenjuBoard, SquaredMatrix, SquaredMatrixExtension, StateTensor, TerminalState};
+use game::{RenjuBoard, SquaredMatrixExtension, StateTensor, TerminalState};
 use mcts::MonteCarloTree;
-use player::{Match, SelfPlayer};
+
 use train::{DataProducer, TrainDataItem, Trainer};
 mod model;
 use model::{PolicyValueModel, RenjuModel};
+mod human;
+use human::{BoardInfo, MatchState};
 
 static ABOUT_TEXT: &str = "Renju game ";
 
@@ -43,31 +45,6 @@ Train the model by reinforcement learning
 #[derive(Parser, Debug)]
 #[clap(author, version, about = ABOUT_TEXT, long_about = Some(ABOUT_TEXT), trailing_var_arg=true)]
 struct Arguments {
-    /*
-    /// The root folder on local filesystem to scan
-    #[clap(display_order=1, short, long, default_value_t = utils::get_current_dir())]
-    folder: String,
-
-    /// Regular expression to include files. Only files whose name matches the specified regexp will be listed. E.g. to only list *.dll and *.exe files, you can specify `((\\.dll)$)|((\\.exe)$)`
-    #[clap(display_order=2, short, long, default_value(".+"))]
-    include: String,
-
-    /// Regular expression to exclude files and directories. Files or directories whose name matches this regexp will be skipped
-    #[clap(display_order=3, short, long, default_value("(^~)|(^\\.)|((\\.tmp)$)|((\\.log)$)"))]
-    exclude: String,
-
-    /// Max number of recursive folders to scan
-    #[clap(display_order=4, short, long, default_value_t = 5)]
-    depth: u8,
-
-    /// Optional parameter. When a file path and name is supplied, file list is stored into the specified path in CSV format
-    #[clap(display_order=5, short, long)]
-    output : Option<String>,
-
-    /// For security consideration, application should not run as root-user. This optional paramerer allows to set a non-privileged user. This parameter only works for Linux/Unix/Mac
-    #[clap(display_order=6, short, long)]
-    user: Option<String>,
-     */
     #[clap(subcommand)]
     verb: Option<Verb>,
 }
@@ -96,11 +73,6 @@ async fn main() {
     let args = Arguments::parse();
 
     match args.verb {
-        _ => {
-            tauri::Builder::default()
-                .run(tauri::generate_context!())
-                .expect("error while running tauri application");
-        }
         Some(Verb::Produce { address }) => {
             println!("Connecting to {}", address);
             let mut stream = TcpStream::connect(address)
@@ -196,7 +168,12 @@ async fn main() {
             drop(children);
         }
 
-        _ => {}
+        _ => {
+            tauri::Builder::default()
+                .invoke_handler(tauri::generate_handler![new_match, do_move])
+                .run(tauri::generate_context!())
+                .expect("error while running tauri application");
+        }
     }
 
     println!("Exiting...");
@@ -310,4 +287,52 @@ impl TcpServer {
             }
         }
     }
+}
+
+#[tauri::command]
+async fn new_match(window: tauri::Window, black: bool) {
+    human::start_new_match(black);
+
+    let board_info: Box<BoardInfo> = human::execute(Box::new(move |m| {
+        if !black {
+            m.machine_move();
+        }
+        Box::new(m.get_board())
+    }))
+    .await;
+    window.emit("board_updated", board_info).unwrap();
+}
+
+#[tauri::command]
+async fn do_move(window: tauri::Window, pos: (usize, usize)) -> MatchState {
+    let board_info: Box<BoardInfo> = human::execute(Box::new(move |m| {
+        m.human_move(pos);
+        Box::new(m.get_board())
+    }))
+    .await;
+
+    let mut state = board_info.get_state();
+
+    let seconds = match board_info.get_stones() {
+        0..=3 => 3,
+        4..=6 => 7,
+        _ => 15,
+    };
+
+    window.emit("board_updated", board_info).unwrap();
+
+    if state != MatchState::HumanWon && state != MatchState::Draw {
+        sleep(Duration::from_secs(seconds)).await;
+
+        let board_info: Box<BoardInfo> = human::execute(Box::new(|m| {
+            m.machine_move();
+            Box::new(m.get_board())
+        }))
+        .await;
+
+        state = board_info.get_state();
+        window.emit("board_updated", board_info).unwrap();
+    }
+
+    state
 }

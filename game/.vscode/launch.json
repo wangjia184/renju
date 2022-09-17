@@ -44,9 +44,7 @@
                     "kind": "bin"
                 }
             },
-            "args": [
-                "train"
-            ],
+            "args": [],
             "cwd": "${workspaceFolder}"
         },
         {

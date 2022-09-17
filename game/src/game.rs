@@ -268,6 +268,9 @@ impl StoneScanResult {
 }
 
 impl RenjuBoard {
+    pub fn get_matrix(self: &Self) -> &SquaredMatrix<u8> {
+        &self.matrix
+    }
     pub fn print(self: &Self) {
         self.matrix.print();
     }
@@ -295,11 +298,16 @@ impl RenjuBoard {
         self.last_move
     }
 
+    pub fn get_stones(self: &Self) -> usize {
+        self.stones
+    }
+
     // Add a new stone into board
     pub fn do_move(self: &mut Self, pos: (usize, usize)) -> TerminalState {
-        assert!(
-            self.available_matrix[pos.0][pos.1] == (Color::Black as u8) || self.last_move.is_none()
-        );
+        // this assert only needs for training
+        //assert!(
+        //    self.available_matrix[pos.0][pos.1] == (Color::Black as u8) || self.last_move.is_none()
+        //);
         assert_eq!(self.matrix[pos.0][pos.1], Color::None as u8);
 
         let color = if (self.stones % 2) == 0 {
