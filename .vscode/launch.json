@@ -1,0 +1,92 @@
+{
+    // 使用 IntelliSense 了解相关属性。 
+    // 悬停以查看现有属性的描述。
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "attach",
+            "pid": "${command:pickProcess}",
+            "name": "Debug a running process",
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in library 'renju_game'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--lib",
+                    "--package=renju_game"
+                ],
+                "filter": {
+                    "name": "renju_game",
+                    "kind": "lib"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'renju_game'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=renju_game",
+                    "--package=renju_game"
+                ],
+                "filter": {
+                    "name": "renju_game",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "DYLD_LIBRARY_PATH": "/opt/homebrew/opt/tensorflow/lib"
+            }
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'renju_game'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=renju_game",
+                    "--package=renju_game"
+                ],
+                "filter": {
+                    "name": "renju_game",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug integration test 'game_test'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--test=game_test",
+                    "--package=renju_game"
+                ],
+                "filter": {
+                    "name": "game_test",
+                    "kind": "test"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}

@@ -4,36 +4,23 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-clap = { version = "3.1.18", features = ["derive"] }
-tokio = { version = "1.18.2", features = [
-    "process",
-    "sync",
-    "macros",
-    "io-util",
-    "rt-multi-thread",
-    "fs",
-    "time",
+clap = { version = "3.2.20", features = ["derive"] }
+tokio = { version = "1.21.0", features = [
+    "full",
 ] } #https://docs.rs/tokio/1.18.2/tokio/index.html#feature-flags
-tokio-util = { version = "0.7.2", features = ["io"] }
-
+tokio-util = { version = "0.7.4", features = ["full"] }
+futures-util = { version = "0.3.24" }
+futures = "0.3.24"
 bytemuck = "1.12.1"
 regex = "1.6.0"
-tensorflow = { path = "./tensorflow/rust", features = ["ndarray"] }
-tensorflow-sys = { path = "./tensorflow/rust/tensorflow-sys", features = [
-    "runtime_linking",
-] }
+bytes = "1.2.1"
+bincode = "1.3.3"
+serde_json = "1.0"
+serde = { version = "1.0.144", features = ["derive"] }
+tauri = { version = "1.1.1", features = ["api-all"] }
+pyo3 = { version = "0.17.1", features = [] }
+num_cpus = "1.13.1"
 
-
-ndarray = { version = "0.15.6", features = ["blas"] }
-blas-src = { version = "0.8.0", default-features = false, features = [
-    "accelerate",
-] }
-# BLAS source choices:
-# accelerate, which is the one in the Accelerate framework (macOS only),
-# blis, which is the one in BLIS,
-# intel-mkl, which is the one in Intel MKL,
-# netlib, which is the reference one by Netlib, and
-# openblas, which is the one in OpenBLAS.
 
 rayon = "1.5.3"
 rand = "0.8.5"
@@ -48,6 +35,17 @@ rand = "0.8.5"
 # is why it is not a default feature -- it could become hard to disable.
 rusqlite = { version = "0.28.0", features = ["bundled", "backup"] }
 
+# BLAS source choices:
+# accelerate, which is the one in the Accelerate framework (macOS only),
+# blis, which is the one in BLIS,
+# intel-mkl, which is the one in Intel MKL,
+# netlib, which is the reference one by Netlib, and
+# openblas, which is the one in OpenBLAS.
+[target.'cfg(target_os = "macos")'.dependencies]
+ndarray = { version = "0.15.6", features = ["blas"] }
+blas-src = { version = "0.8.0", default-features = false, features = [
+    "accelerate",
+] }
 
 [dependencies.uuid]
 version = "1.1.2"
@@ -56,6 +54,19 @@ features = [
     "fast-rng",          # Use a faster (but still sufficiently random) RNG
     "macro-diagnostics", # Enable better diagnostics for compile-time UUIDs
 ]
+
+
+[build-dependencies]
+tauri-build = { version = "1.0.4" }
+
+
+[features]
+# by default Tauri runs in production mode
+# when `tauri dev` runs it is executed with `cargo run --no-default-features` if `devPath` is an URL
+default = ["custom-protocol"]
+# this feature is used used for production builds where `devPath` points to the filesystem
+# DO NOT remove this
+custom-protocol = ["tauri/custom-protocol"]
 
 
 [profile.release]

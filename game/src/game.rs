@@ -157,8 +157,8 @@ pub trait SquaredMatrixExtension<T> {
 
 #[derive(Debug, Clone)]
 pub struct RenjuBoard {
-    matrix: SquaredMatrix,                    // 0=BLANK; 1=BLACK; 2=WHITE
-    available_matrix: SquaredMatrix,          // available positions, 1=available
+    matrix: SquaredMatrix<u8>,                // 0=BLANK; 1=BLACK; 2=WHITE
+    available_matrix: SquaredMatrix<u8>,      // available positions, 1=available
     last_move: Option<(usize, usize)>,        // recent move
     stones: usize,                            // number of moves
     black_win_moves: HashSet<(usize, usize)>, // just one black move in specified position to win
@@ -268,6 +268,9 @@ impl StoneScanResult {
 }
 
 impl RenjuBoard {
+    pub fn get_matrix(self: &Self) -> &SquaredMatrix<u8> {
+        &self.matrix
+    }
     pub fn print(self: &Self) {
         self.matrix.print();
     }
@@ -295,10 +298,17 @@ impl RenjuBoard {
         self.last_move
     }
 
+    pub fn get_stones(self: &Self) -> usize {
+        self.stones
+    }
+
     // Add a new stone into board
     pub fn do_move(self: &mut Self, pos: (usize, usize)) -> TerminalState {
-        assert!(self.available_matrix[pos.0][pos.1] == Stone::black() || self.last_move.is_none());
-        assert_eq!(self.matrix[pos.0][pos.1], Stone::none());
+        // this assert only needs for training
+        //assert!(
+        //    self.available_matrix[pos.0][pos.1] == (Color::Black as u8) || self.last_move.is_none()
+        //);
+        assert_eq!(self.matrix[pos.0][pos.1], Color::None as u8);
 
         let color = if (self.stones % 2) == 0 {
             Color::Black
@@ -424,7 +434,7 @@ impl RenjuBoard {
 
         for row in 0..BOARD_SIZE {
             for col in 0..BOARD_SIZE {
-                if self.available_matrix[row][col] == Stone::black() {
+                if self.available_matrix[row][col] == Color::Black as u8 {
                     positions.push((row, col));
                 }
             }

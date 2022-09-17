@@ -3,7 +3,7 @@ use game::{SquaredMatrix, StateTensor};
 use std::{borrow::Cow, cell::RefCell, rc::Rc};
 
 pub trait Player {
-    fn get_next_move(
+    fn do_next_move(
         self: &mut Self,
         board: &mut RenjuBoard,
         choices: &Vec<(usize, usize)>,
@@ -43,9 +43,9 @@ where
             let is_black_turn = self.board.is_black_turn();
             if let TerminalState::AvailableMoves(ref moves) = state {
                 let pos = if is_black_turn {
-                    self.black_player.get_next_move(&mut self.board, moves)
+                    self.black_player.do_next_move(&mut self.board, moves)
                 } else {
-                    self.white_player.get_next_move(&mut self.board, moves)
+                    self.white_player.do_next_move(&mut self.board, moves)
                 };
 
                 state = self.board.do_move(pos);
@@ -57,9 +57,18 @@ where
                 };
 
                 match state {
-                    TerminalState::BlackWon => return state,
-                    TerminalState::WhiteWon => return state,
-                    TerminalState::Draw => return state,
+                    TerminalState::BlackWon => {
+                        //self.board.print();
+                        return state;
+                    }
+                    TerminalState::WhiteWon => {
+                        //self.board.print();
+                        return state;
+                    }
+                    TerminalState::Draw => {
+                        //self.board.print();
+                        return state;
+                    }
                     _ => continue,
                 }
             } else {
@@ -76,27 +85,26 @@ pub struct SelfPlayer {
     // temperature parameter in (0, 1] controls the level of exploration
     temperature: f32,
     state_prob_pairs: Vec<(StateTensor, SquaredMatrix)>,
+    iterations: u32,
 }
 
 impl SelfPlayer {
     pub fn new_pair(model: Rc<RefCell<PolicyValueModel>>) -> (Self, Self) {
-        let tree = Rc::new(RefCell::new(MonteCarloTree::new(
-            5f32,
-            500u32,
-            model.clone(),
-        )));
+        let tree = Rc::new(RefCell::new(MonteCarloTree::new(5f32, model.clone())));
         (
             Self {
                 model: model.clone(),
                 tree: tree.clone(),
                 temperature: 1e-3,
                 state_prob_pairs: Vec::with_capacity(100),
+                iterations: 500u32,
             },
             Self {
                 model: model,
                 tree: tree,
                 temperature: 1e-3,
                 state_prob_pairs: Vec::with_capacity(100),
+                iterations: 500u32,
             },
         )
     }
@@ -112,17 +120,13 @@ impl SelfPlayer {
         let mut pairs = Cow::from(move_prob_pairs);
         while pairs.len() > 1 {
             // determine the position to move
-            let mut probability_tensor = Tensor::<f32>::new(&[pairs.len() as u64]);
-            pairs
-                .iter()
-                .enumerate()
-                .for_each(|(index, (_, probability))| {
-                    probability_tensor[index] = *probability;
-                });
+
+            let vector: Vec<_> = pairs.iter().map(|(_, probability)| *probability).collect();
+
             let index = self
                 .model
                 .borrow()
-                .random_choose_with_dirichlet_noice(&probability_tensor)
+                .random_choose_with_dirichlet_noice(&vector)
                 .expect("random_choose_with_dirichlet_noice failed");
 
             let pos = pairs[index].0;
@@ -152,15 +156,20 @@ impl SelfPlayer {
 }
 
 impl Player for SelfPlayer {
-    fn get_next_move(
+    fn do_next_move(
         self: &mut Self,
         board: &mut RenjuBoard,
         choices: &Vec<(usize, usize)>,
     ) -> (usize, usize) {
+        for _ in 0..self.iterations {
+            // TODO : avoid heap allocation, use stack only
+            self.tree.borrow_mut().rollout(board.clone(), choices);
+        }
+
         let move_prob_pairs: Vec<((usize, usize), f32)> = self
             .tree
             .borrow_mut()
-            .get_move_probability(&board, choices, self.temperature);
+            .get_move_probability(self.temperature);
 
         // 15x15 tensor records the probability of each move
         let mut mcts_prob_matrix = SquaredMatrix::default();

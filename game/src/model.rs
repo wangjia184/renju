@@ -1,373 +1,185 @@
-use bytemuck::cast_slice;
-use ndarray::prelude::*;
-use ndarray::Array;
-use ndarray::IxDynImpl;
-use ndarray::OwnedRepr;
-use tensorflow::Graph;
-use tensorflow::Operation;
-use tensorflow::SavedModelBundle;
-use tensorflow::SessionOptions;
-use tensorflow::SessionRunArgs;
-use tensorflow::Tensor;
+use bytes::Bytes;
+use pyo3::prelude::*;
+use pyo3::types::{PyBytes, PyList, PyTuple};
+use std::fs::OpenOptions;
+use std::io::prelude::*;
 
-use tensorflow::Status;
+use crate::game::*;
 
-use tensorflow_sys as tf;
-
-use std::sync::Once;
-
-use crate::*;
-
-static START: Once = Once::new();
-
-pub fn load_plugable_device(library_filename: &str) -> Result<(), Status> {
-    use std::ffi::CString;
-    let c_filename = CString::new(library_filename)?;
-
-    let raw_lib = unsafe {
-        let raw_status: *mut tf::TF_Status = tf::TF_NewStatus();
-        let raw_lib = tf::TF_LoadPluggableDeviceLibrary(c_filename.as_ptr(), raw_status);
-        if !raw_status.is_null() {
-            tf::TF_DeleteStatus(raw_status)
-        }
-        raw_lib
-    };
-
-    if raw_lib.is_null() {
-        Err(Status::new())
-    } else {
-        Ok(())
-    }
+pub struct PolicyValueModel {
+    module: Py<PyModule>,
 }
 
 pub trait RenjuModel {
-    fn predict(
-        self: &Self,
-        state_tensors: &[StateTensor],
-    ) -> Result<(ArrayBase<OwnedRepr<f32>, Dim<[usize; 3]>>, f32), Status>;
-
     fn train(
         self: &Self,
         state_tensors: &[StateTensor],
         prob_matrixes: &[SquaredMatrix],
         scores: &[f32],
         lr: f32,
-    ) -> Result<(f32 /*loss*/, f32 /*entropy*/), Status>;
+    ) -> PyResult<(f32, f32)>;
+
+    fn predict(
+        self: &Self,
+        state_tensors: &[StateTensor],
+        use_log_prob: bool, // true to return log probability
+    ) -> PyResult<(SquaredMatrix<f32>, f32)>;
+
+    fn export(self: &Self) -> PyResult<Bytes>;
+
+    fn import(self: &Self, buffer: Bytes) -> PyResult<()>;
+
+    fn random_choose_with_dirichlet_noice(self: &Self, probs: &[f32]) -> PyResult<usize>;
 }
 
-pub struct PolicyValueModel {
-    graph: Graph,
-    bundle: SavedModelBundle,
-    predict_input: Operation,
-    predict_output: Operation,
-    train_input_state_batch: Operation,
-    train_input_mcts_probs: Operation,
-    train_input_winner_batch: Operation,
-    train_input_lr: Operation,
-    train_output: Operation,
-    export_input: Operation,
-    export_output: Operation,
-    restore_input: Operation,
-    restore_output: Operation,
-    random_choose_with_dirichlet_noice_input: Operation,
-    random_choose_with_dirichlet_noice_output: Operation,
-}
-
+//
 impl PolicyValueModel {
-    pub fn load(export_dir: &str) -> Result<Self, Status> {
-        START.call_once(|| {
-            tf::library::load().expect("Unable to load libtensorflow");
-            //*
-            match load_plugable_device("libmetal_plugins.dylib") {
-                Ok(_) => println!("Loaded libmetal_plugin.dylib successfully."),
-                Err(_) => println!("WARNING: Unable to load plugin."),
-            }; //*/
-        });
+    pub fn new(filename: &str) -> PyResult<Self> {
+        let mut source_code = String::new();
+        {
+            let mut file = OpenOptions::new()
+                .read(true)
+                .write(false)
+                .truncate(false)
+                .create(false)
+                .open(filename)?;
 
-        let mut graph = Graph::new();
-        let bundle =
-            SavedModelBundle::load(&SessionOptions::new(), &["serve"], &mut graph, export_dir)?;
+            file.read_to_string(&mut source_code)?;
+        }
 
-        // predict
-        let predict_signature = bundle
-            .meta_graph_def()
-            .get_signature("predict")
-            .expect("Unable to find concreate function `predict`");
-        let inputs_info = predict_signature
-            .get_input("state_batch")
-            .expect("Unable to find `state_batch` in concreate function `predict`");
-        let act_output_info = predict_signature
-            .get_output("output_0")
-            .expect("Unable to find `output_0` in concreate function `predict`");
-        let predict_input_op = graph
-            .operation_by_name_required(&inputs_info.name().name)
-            .expect("Unable to find `state_batch` op in concreate function `predict`");
-        let predict_output_op = graph
-            .operation_by_name_required(&act_output_info.name().name)
-            .expect("Unable to find `output_0` in concreate function `predict`");
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| -> PyResult<Self> {
+            let module: Py<PyModule> =
+                PyModule::from_code(py, source_code.as_str(), filename, "")?.into();
 
-        // train_step
-        let train_signature = bundle
-            .meta_graph_def()
-            .get_signature("train")
-            .expect("Unable to find concreate function `train`");
-        let input_state_batch_info = train_signature
-            .get_input("state_batch")
-            .expect("Unable to find `state_batch` in concreate function `train`");
-        let input_mcts_probs_info = train_signature
-            .get_input("mcts_probs")
-            .expect("Unable to find `mcts_probs` in concreate function `train`");
-        let input_winner_batch_info = train_signature
-            .get_input("winner_batch")
-            .expect("Unable to find `winner_batch` in concreate function `train`");
-        let input_lr_info = train_signature
-            .get_input("lr")
-            .expect("Unable to find `lr` in concreate function `train`");
-        let output_info = train_signature
-            .get_output("output_0")
-            .expect("Unable to find `loss` in concreate function `train`");
-        let train_input_state_batch = graph
-            .operation_by_name_required(&input_state_batch_info.name().name)
-            .expect("Unable to find `state_batch` op in concreate function `train`");
-        let train_input_mcts_probs = graph
-            .operation_by_name_required(&input_mcts_probs_info.name().name)
-            .expect("Unable to find `mcts_probs` op in concreate function `train`");
-        let train_input_winner_batch = graph
-            .operation_by_name_required(&input_winner_batch_info.name().name)
-            .expect("Unable to find `winner_batch` op in concreate function `train`");
-        let train_input_lr = graph
-            .operation_by_name_required(&input_lr_info.name().name)
-            .expect("Unable to find `lr` op in concreate function `train`");
-        let train_output = graph
-            .operation_by_name_required(&output_info.name().name)
-            .expect("Unable to find `output_0` op in concreate function `train`");
-
-        // save
-        let export_signature = bundle
-            .meta_graph_def()
-            .get_signature("save")
-            .expect("Unable to find concreate function `save`");
-        let inputs_info = export_signature
-            .get_input("checkpoint_path")
-            .expect("Unable to find `checkpoint_path` in concreate function `save`");
-        let outputs_info = export_signature
-            .get_output("output_0")
-            .expect("Unable to find `output_0` in concreate function `save`");
-        let export_input_op = graph
-            .operation_by_name_required(&inputs_info.name().name)
-            .expect("Unable to find `checkpoint_path` op in concreate function `save`");
-        let export_output_op = graph
-            .operation_by_name_required(&outputs_info.name().name)
-            .expect("Unable to find `output_0` in concreate function `save`");
-
-        // restore
-        let restore_signature = bundle
-            .meta_graph_def()
-            .get_signature("restore")
-            .expect("Unable to find concreate function `restore`");
-        let inputs_info = restore_signature
-            .get_input("checkpoint_path")
-            .expect("Unable to find `checkpoint_path` in concreate function `restore`");
-        let outputs_info = restore_signature
-            .get_output("output_0")
-            .expect("Unable to find `output_0` in concreate function `restore`");
-        let restore_input_op = graph
-            .operation_by_name_required(&inputs_info.name().name)
-            .expect("Unable to find `checkpoint_path` op in concreate function `restore`");
-        let restore_output_op = graph
-            .operation_by_name_required(&outputs_info.name().name)
-            .expect("Unable to find `output_0` in concreate function `restore`");
-
-        // random_choose_with_dirichlet_noice
-        let choice_signature = bundle
-            .meta_graph_def()
-            .get_signature("random_choose_with_dirichlet_noice")
-            .expect("Unable to find concreate function `random_choose_with_dirichlet_noice`");
-        let inputs_info = choice_signature.get_input("probs").expect(
-            "Unable to find `probs` in concreate function `random_choose_with_dirichlet_noice`",
-        );
-        let outputs_info = choice_signature.get_output("output_0").expect(
-            "Unable to find `output_0` in concreate function `random_choose_with_dirichlet_noice`",
-        );
-        let random_choose_with_dirichlet_noice_input_op = graph
-            .operation_by_name_required(&inputs_info.name().name)
-            .expect("Unable to find `probs` op in concreate function `random_choose_with_dirichlet_noice`");
-        let random_choose_with_dirichlet_noice_output_op = graph
-            .operation_by_name_required(&outputs_info.name().name)
-            .expect(
-            "Unable to find `output_0` in concreate function `random_choose_with_dirichlet_noice`",
-        );
-
-        Ok(Self {
-            graph: graph,
-            bundle: bundle,
-            predict_input: predict_input_op,
-            predict_output: predict_output_op,
-            train_input_state_batch: train_input_state_batch,
-            train_input_mcts_probs: train_input_mcts_probs,
-            train_input_winner_batch: train_input_winner_batch,
-            train_input_lr: train_input_lr,
-            train_output: train_output,
-            export_input: export_input_op,
-            export_output: export_output_op,
-            restore_input: restore_input_op,
-            restore_output: restore_output_op,
-            random_choose_with_dirichlet_noice_input: random_choose_with_dirichlet_noice_input_op,
-            random_choose_with_dirichlet_noice_output: random_choose_with_dirichlet_noice_output_op,
+            Ok(Self { module: module })
         })
     }
 
-    pub fn save(self: &Self, filename: &str) -> Result<(), Status> {
-        let file_path_tensor: Tensor<String> = Tensor::from(String::from(filename));
+    pub fn get_best() -> Self {
+        let renju_model =
+            PolicyValueModel::new("/Users/jerry/projects/renju/renju.git/game/model.py")
+                .expect("Unable to load model");
 
-        // Save the model.
-        let mut step = SessionRunArgs::new();
-        step.add_feed(&self.export_input, 0, &file_path_tensor);
-        step.add_target(&self.export_output);
-        self.bundle.session.run(&mut step)
-    }
-
-    pub fn restore(self: &Self, filename: &str) -> Result<(), Status> {
-        let file_path_tensor: Tensor<String> = Tensor::from(String::from(filename));
-
-        // Save the model.
-        let mut step = SessionRunArgs::new();
-        step.add_feed(&self.restore_input, 0, &file_path_tensor);
-        step.add_target(&self.restore_output);
-        self.bundle.session.run(&mut step)
-    }
-
-    pub fn random_choose_with_dirichlet_noice(
-        self: &Self,
-        probabilities: &Tensor<f32>,
-    ) -> Result<usize, Status> {
-        let shape = probabilities.shape();
-        assert_eq!(shape.dims(), Some(1));
-
-        let mut step = SessionRunArgs::new();
-        step.add_feed(
-            &self.random_choose_with_dirichlet_noice_input,
-            0,
-            &probabilities,
-        );
-        step.add_target(&self.random_choose_with_dirichlet_noice_output);
-        let selected_index_token =
-            step.request_fetch(&self.random_choose_with_dirichlet_noice_output, 0);
-        self.bundle.session.run(&mut step)?;
-
-        let tensor: Tensor<i64> = step
-            .fetch(selected_index_token)
-            .expect("Unable to retrieve selected result");
-        let index = tensor[0];
-        if index >= 0 && index < shape[0].unwrap() {
-            return Ok(index as usize);
+        if let Ok(mut file) = OpenOptions::new()
+            .read(true)
+            .write(false)
+            .truncate(false)
+            .create(false)
+            .open("best.ckpt")
+        {
+            let mut buffer = Vec::<u8>::with_capacity(100000);
+            if let Ok(size) = file.read_to_end(&mut buffer) {
+                if size > 0 {
+                    if let Err(e) = renju_model.import(Bytes::from(buffer)) {
+                        println!("Unable to import parameters. {}", e);
+                    } else {
+                        println!("Imported parameters");
+                    }
+                }
+            }
         }
-        unreachable!("Index must be in the range of probabilities")
+
+        renju_model
     }
 }
 
 impl RenjuModel for PolicyValueModel {
-    fn predict(
-        self: &Self,
-        state_tensors: &[StateTensor],
-    ) -> Result<(ArrayBase<OwnedRepr<f32>, Dim<[usize; 3]>>, f32), Status> {
-        assert!(!state_tensors.is_empty());
-        let state_batch = Tensor::<f32>::new(&[
-            state_tensors.len() as u64,
-            state_tensors[0].len() as u64,
-            state_tensors[0][0].len() as u64,
-            state_tensors[0][0][0].len() as u64,
-        ])
-        .with_values(cast_slice(&state_tensors))
-        .expect("Unable to create state batch tensor");
-
-        let mut prediction = SessionRunArgs::new();
-        prediction.add_feed(&self.predict_input, 0, &state_batch);
-        prediction.add_target(&self.predict_output);
-        let log_action_token = prediction.request_fetch(&self.predict_output, 0);
-        let value_token = prediction.request_fetch(&self.predict_output, 1);
-        self.bundle.session.run(&mut prediction)?;
-
-        // Check our results.
-        let log_action: Tensor<f32> = prediction
-            .fetch(log_action_token)
-            .expect("Unable to retrieve action result");
-        let value: Tensor<f32> = prediction
-            .fetch(value_token)
-            .expect("Unable to retrieve log result");
-
-        assert_eq!(
-            log_action.dims(),
-            [
-                state_tensors.len() as u64,
-                1u64,
-                game::BOARD_SIZE as u64 * game::BOARD_SIZE as u64
-            ]
-        );
-
-        let dim = Dim([state_tensors.len(), 1, game::BOARD_SIZE * game::BOARD_SIZE]);
-        let data: Vec<_> = log_action.iter().map(|x| x.clone()).collect();
-        // We can safely unwrap this because we know that `data` will have the
-        // correct number of elements to conform to `dim`.
-        let x = Array::from_shape_vec(dim, data).unwrap();
-
-        Ok((x, value[0]))
-    }
-
     fn train(
         self: &Self,
         state_tensors: &[StateTensor],
         prob_matrixes: &[SquaredMatrix],
         scores: &[f32],
         lr: f32,
-    ) -> Result<(f32 /*loss*/, f32 /*entropy*/), Status> {
-        assert!(!state_tensors.is_empty());
-        assert_eq!(state_tensors.len(), prob_matrixes.len());
-        assert_eq!(state_tensors.len(), scores.len());
+    ) -> PyResult<(f32, f32)> {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| -> PyResult<(f32, f32)> {
+            py.check_signals()?;
+            let train_fn: Py<PyAny> = self.module.as_ref(py).getattr("train")?.into();
 
-        let state_batch = Tensor::<f32>::new(&[
-            state_tensors.len() as u64,
-            state_tensors[0].len() as u64,
-            state_tensors[0][0].len() as u64,
-            state_tensors[0][0][0].len() as u64,
-        ])
-        .with_values(cast_slice(state_tensors))
-        .expect("Unable to create state batch tensor");
+            let state_batch: &PyList = PyList::new(py, state_tensors);
+            let prob_batch: &PyList = PyList::new(py, prob_matrixes);
+            let score_batch: &PyList = PyList::new(py, scores);
 
-        let probs_tensor = Tensor::<f32>::new(&[
-            prob_matrixes.len() as u64,
-            (prob_matrixes[0].len() * prob_matrixes[0][0].len()) as u64,
-        ])
-        .with_values(cast_slice(prob_matrixes))
-        .expect("Unable to create probability tensor");
+            let args = (state_batch, prob_batch, score_batch, lr);
+            let result = train_fn.call1(py, args)?;
+            let tuple = <PyTuple as PyTryFrom>::try_from(result.as_ref(py))?;
+            let loss = tuple.get_item(0)?;
+            let entropy = tuple.get_item(1)?;
+            Ok((loss.extract()?, entropy.extract()?))
+        })
+    }
 
-        let score_tensor = Tensor::<f32>::new(&[scores.len() as u64])
-            .with_values(cast_slice(scores))
-            .expect("Unable to create score tensor");
+    fn predict(
+        self: &Self,
+        state_tensors: &[StateTensor],
+        use_log_prob: bool,
+    ) -> PyResult<(SquaredMatrix<f32>, f32)> {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            py.check_signals()?;
+            let predict_fn: Py<PyAny> = self.module.as_ref(py).getattr("predict")?.into();
 
-        let lr_tensor = Tensor::<f32>::new(&[1])
-            .with_values(&[lr])
-            .expect("Unable to create lr tensor");
+            let state_batch: &PyList = PyList::new(py, state_tensors);
 
-        let mut train_step = SessionRunArgs::new();
-        train_step.add_feed(&self.train_input_state_batch, 0, &state_batch);
-        train_step.add_feed(&self.train_input_mcts_probs, 0, &probs_tensor);
-        train_step.add_feed(&self.train_input_winner_batch, 0, &score_tensor);
-        train_step.add_feed(&self.train_input_lr, 0, &lr_tensor);
-        train_step.add_target(&self.train_output);
+            let args = PyTuple::new(py, &[state_batch]);
+            let result = predict_fn.call1(py, args)?;
+            let tuple = <PyTuple as PyTryFrom>::try_from(result.as_ref(py))?;
 
-        let loss_token = train_step.request_fetch(&self.train_output, 0);
-        let entropy_token = train_step.request_fetch(&self.train_output, 1);
-        self.bundle.session.run(&mut train_step)?;
+            let log_prob_list = <PyList as PyTryFrom>::try_from(tuple.get_item(0)?)?;
+            assert_eq!(log_prob_list.len(), BOARD_SIZE * BOARD_SIZE);
+            let mut log_prob_matrix: SquaredMatrix<f32> = SquaredMatrix::default();
+            for (index, log_prob) in log_prob_list.iter().enumerate() {
+                let mut probability = log_prob.extract::<f32>()?;
+                if use_log_prob {
+                    probability = probability.ln();
+                }
+                log_prob_matrix[index / BOARD_SIZE][index % BOARD_SIZE] = probability;
+            }
 
-        // Check our results.
-        let loss: Tensor<f32> = train_step
-            .fetch(loss_token)
-            .expect("Unable to retrieve loss result");
-        let entropy: Tensor<f32> = train_step
-            .fetch(entropy_token)
-            .expect("Unable to retrieve entropy result");
+            let score: f32 = tuple.get_item(1)?.extract()?;
 
-        Ok((loss[0], entropy[0]))
+            Ok((log_prob_matrix, score))
+        })
+    }
+
+    fn export(self: &Self) -> PyResult<Bytes> {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let export_fn: Py<PyAny> = self.module.as_ref(py).getattr("export_parameters")?.into();
+
+            let result: Py<PyAny> = export_fn.call0(py)?.into();
+            let encoded_str = <PyBytes as PyTryFrom>::try_from(result.as_ref(py))?;
+
+            let buffer = Bytes::copy_from_slice(encoded_str.as_bytes());
+            Ok(buffer)
+        })
+    }
+
+    fn import(self: &Self, buffer: Bytes) -> PyResult<()> {
+        Python::with_gil(|py| {
+            let import_fn: Py<PyAny> = self.module.as_ref(py).getattr("import_parameters")?.into();
+
+            let bytes = PyBytes::new(py, &buffer);
+            let args = PyTuple::new(py, &[bytes]);
+            import_fn.call1(py, args)?;
+            Ok(())
+        })
+    }
+
+    fn random_choose_with_dirichlet_noice(self: &Self, probs: &[f32]) -> PyResult<usize> {
+        Python::with_gil(|py| {
+            let func: Py<PyAny> = self
+                .module
+                .as_ref(py)
+                .getattr("random_choose_with_dirichlet_noice")?
+                .into();
+
+            let state_batch: &PyList = PyList::new(py, probs);
+
+            let args = PyTuple::new(py, &[state_batch]);
+            func.call1(py, args)?;
+            Ok(0)
+        })
     }
 }

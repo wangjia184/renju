@@ -10,4 +10,3 @@ pub use game::{RenjuBoard, SquaredMatrix, SquaredMatrixExtension, StateTensor, T
 pub use mcts::{MonteCarloTree, TreeNode};
 pub use model::{PolicyValueModel, RenjuModel};
 pub use player::{Match, SelfPlayer};
-pub use tensorflow::Tensor;
