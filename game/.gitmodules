@@ -1,3 +1,0 @@
-[submodule "tensorflow/rust"]
-	path = tensorflow/rust
-	url = git@github.com:wangjia184/rust.git
