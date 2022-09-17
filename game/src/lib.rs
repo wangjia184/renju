@@ -1,6 +1,5 @@
 pub mod game;
 pub mod mcts;
-pub mod storage;
 
 pub mod model;
 pub mod player;

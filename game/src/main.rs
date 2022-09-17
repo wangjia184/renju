@@ -20,7 +20,7 @@ use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 mod game;
 mod mcts;
 mod player;
-mod storage;
+
 mod train;
 use game::{RenjuBoard, SquaredMatrixExtension, StateTensor, TerminalState};
 use mcts::MonteCarloTree;
@@ -315,13 +315,15 @@ async fn do_move(window: tauri::Window, pos: (usize, usize)) -> MatchState {
 
     let seconds = match board_info.get_stones() {
         0..=3 => 3,
-        4..=6 => 7,
+        4..=6 => 5,
+        7..=14 => 10,
         _ => 15,
     };
 
     window.emit("board_updated", board_info).unwrap();
 
-    if state != MatchState::HumanWon && state != MatchState::Draw {
+    if state != MatchState::HumanWon && state != MatchState::Draw && state != MatchState::MachineWon
+    {
         sleep(Duration::from_secs(seconds)).await;
 
         let board_info: Box<BoardInfo> = human::execute(Box::new(|m| {
