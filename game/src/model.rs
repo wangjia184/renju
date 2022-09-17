@@ -1,13 +1,34 @@
+use bytemuck::cast_slice;
 use bytes::Bytes;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList, PyTuple};
 use std::fs::OpenOptions;
 use std::io::prelude::*;
 
+use tensorflow::Graph;
+use tensorflow::Operation;
+use tensorflow::SavedModelBundle;
+use tensorflow::SessionOptions;
+use tensorflow_sys as tf;
+
+use std::sync::Once;
+
+use tensorflow::SessionRunArgs;
+use tensorflow::Tensor;
+
+use tensorflow::Status;
+
 use crate::game::*;
 
 pub struct PolicyValueModel {
     module: Py<PyModule>,
+}
+
+pub struct OnDeviceModel {
+    graph: Graph,
+    bundle: SavedModelBundle,
+    predict_input: Operation,
+    predict_output: Operation,
 }
 
 pub trait RenjuModel {
@@ -181,5 +202,120 @@ impl RenjuModel for PolicyValueModel {
             func.call1(py, args)?;
             Ok(0)
         })
+    }
+}
+
+static START: Once = Once::new();
+
+impl OnDeviceModel {
+    pub fn load(export_dir: &str) -> Result<Self, Status> {
+        START.call_once(|| {
+            if let Err(e) = tf::library::load() {
+                println!("Unable to load libtensorflow. Please download from https://www.tensorflow.org/install/lang_c");
+                panic!("Unable to initialize tensorflow. {}", e);
+            }
+        });
+
+        let mut graph = Graph::new();
+        let bundle =
+            SavedModelBundle::load(&SessionOptions::new(), &["serve"], &mut graph, export_dir)?;
+
+        // predict
+        let predict_signature = bundle
+            .meta_graph_def()
+            .get_signature("predict")
+            .expect("Unable to find concreate function `predict`");
+        let inputs_info = predict_signature
+            .get_input("state_batch")
+            .expect("Unable to find `state_batch` in concreate function `predict`");
+        let act_output_info = predict_signature
+            .get_output("output_0")
+            .expect("Unable to find `output_0` in concreate function `predict`");
+        let predict_input_op = graph
+            .operation_by_name_required(&inputs_info.name().name)
+            .expect("Unable to find `state_batch` op in concreate function `predict`");
+        let predict_output_op = graph
+            .operation_by_name_required(&act_output_info.name().name)
+            .expect("Unable to find `output_0` in concreate function `predict`");
+
+        let model = Self {
+            graph: graph,
+            bundle: bundle,
+            predict_input: predict_input_op,
+            predict_output: predict_output_op,
+        };
+
+        Ok(model)
+    }
+}
+
+impl RenjuModel for OnDeviceModel {
+    fn train(
+        self: &Self,
+        state_tensors: &[StateTensor],
+        prob_matrixes: &[SquaredMatrix],
+        scores: &[f32],
+        lr: f32,
+    ) -> PyResult<(f32, f32)> {
+        unimplemented!()
+    }
+
+    fn predict(
+        self: &Self,
+        state_tensors: &[StateTensor],
+        use_log_prob: bool, // true to return log probability
+    ) -> PyResult<(SquaredMatrix<f32>, f32)> {
+        assert!(!state_tensors.is_empty());
+        assert_eq!(use_log_prob, false);
+        let state_batch = Tensor::<f32>::new(&[
+            state_tensors.len() as u64,
+            state_tensors[0].len() as u64,
+            state_tensors[0][0].len() as u64,
+            state_tensors[0][0][0].len() as u64,
+        ])
+        .with_values(cast_slice(&state_tensors))
+        .expect("Unable to create state batch tensor");
+
+        let mut prediction = SessionRunArgs::new();
+        prediction.add_feed(&self.predict_input, 0, &state_batch);
+        prediction.add_target(&self.predict_output);
+        let log_action_token = prediction.request_fetch(&self.predict_output, 0);
+        let value_token = prediction.request_fetch(&self.predict_output, 1);
+        self.bundle
+            .session
+            .run(&mut prediction)
+            .expect("Unable to run prediction");
+
+        // Check our results.
+        let action_tensor: Tensor<f32> = prediction
+            .fetch(log_action_token)
+            .expect("Unable to retrieve action result");
+        let value_tensor: Tensor<f32> = prediction
+            .fetch(value_token)
+            .expect("Unable to retrieve value");
+
+        assert_eq!(
+            action_tensor.dims(),
+            [BOARD_SIZE as u64 * BOARD_SIZE as u64]
+        );
+
+        let mut matrix = SquaredMatrix::default();
+        action_tensor.iter().enumerate().for_each(|(index, x)| {
+            matrix[index / BOARD_SIZE][index % BOARD_SIZE] = *x;
+        });
+
+        Ok((matrix, value_tensor[0]))
+    }
+
+    fn export(self: &Self) -> PyResult<Bytes> {
+        unimplemented!()
+    }
+
+    fn import(self: &Self, _: Bytes) -> PyResult<()> {
+        unimplemented!()
+    }
+
+    fn random_choose_with_dirichlet_noice(self: &Self, _: &[f32]) -> PyResult<usize> {
+        unimplemented!()
     }
 }

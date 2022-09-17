@@ -2,6 +2,8 @@
 name = "renju_game"
 version = "0.1.0"
 edition = "2021"
+authors = ["Jerry.Wang", "vcer@qq.com"]
+homepage = "https://github.com/wangjia184/renju"
 
 [dependencies]
 clap = { version = "3.2.20", features = ["derive"] }
@@ -21,19 +23,34 @@ tauri = { version = "1.1.1", features = ["api-all"] }
 pyo3 = { version = "0.17.1", features = [] }
 num_cpus = "1.13.1"
 
+tensorflow = "0.19.1"
+tensorflow-sys = { version = "0.22.1", features = ["runtime_linking"] }
 
-rayon = "1.5.3"
+
 rand = "0.8.5"
-# `bundled` causes us to automatically compile and link in an up to date
-# version of SQLite for you. This avoids many common build issues, and
-# avoids depending on the version of SQLite on the users system (or your
-# system), which may be old or missing. It's the right choice for most
-# programs that control their own SQLite databases.
-#
-# That said, it's not ideal for all scenarios and in particular, generic
-# libraries built around `rusqlite` should probably not enable it, which
-# is why it is not a default feature -- it could become hard to disable.
-rusqlite = { version = "0.28.0", features = ["bundled", "backup"] }
+
+
+[dependencies.uuid]
+version = "1.1.2"
+features = [
+    "v4",                # Lets you generate random UUIDs
+    "fast-rng",          # Use a faster (but still sufficiently random) RNG
+    "macro-diagnostics", # Enable better diagnostics for compile-time UUIDs
+]
+
+
+[build-dependencies]
+tauri-build = { version = "1.1.1" }
+copy_to_output = "2.0.0"
+
+[features]
+# by default Tauri runs in production mode
+# when `tauri dev` runs it is executed with `cargo run --no-default-features` if `devPath` is an URL
+default = ["custom-protocol"]
+# this feature is used used for production builds where `devPath` points to the filesystem
+# DO NOT remove this
+custom-protocol = ["tauri/custom-protocol"]
+
 
 # BLAS source choices:
 # accelerate, which is the one in the Accelerate framework (macOS only),
@@ -46,27 +63,6 @@ ndarray = { version = "0.15.6", features = ["blas"] }
 blas-src = { version = "0.8.0", default-features = false, features = [
     "accelerate",
 ] }
-
-[dependencies.uuid]
-version = "1.1.2"
-features = [
-    "v4",                # Lets you generate random UUIDs
-    "fast-rng",          # Use a faster (but still sufficiently random) RNG
-    "macro-diagnostics", # Enable better diagnostics for compile-time UUIDs
-]
-
-
-[build-dependencies]
-tauri-build = { version = "1.0.4" }
-
-
-[features]
-# by default Tauri runs in production mode
-# when `tauri dev` runs it is executed with `cargo run --no-default-features` if `devPath` is an URL
-default = ["custom-protocol"]
-# this feature is used used for production builds where `devPath` points to the filesystem
-# DO NOT remove this
-custom-protocol = ["tauri/custom-protocol"]
 
 
 [profile.release]

@@ -1,5 +1,5 @@
 use crate::game::{RenjuBoard, SquaredMatrix, TerminalState};
-use crate::model::PolicyValueModel;
+use crate::model::OnDeviceModel;
 use crate::player::Player;
 use crate::MonteCarloTree;
 use std::any::Any;
@@ -17,13 +17,15 @@ static SENDER: Mutex<
 
 type CallbackFunction = Box<dyn FnMut(&mut HumanVsMachineMatch) -> Box<dyn Any + Send> + Send>;
 
-static mut MODEL: Option<Rc<RefCell<PolicyValueModel>>> = None;
+static mut MODEL: Option<Rc<RefCell<OnDeviceModel>>> = None;
 static INIT: Once = Once::new();
 
-fn get_model() -> Rc<RefCell<PolicyValueModel>> {
+fn get_model() -> Rc<RefCell<OnDeviceModel>> {
     unsafe {
         INIT.call_once(|| {
-            MODEL = Some(Rc::new(RefCell::new(PolicyValueModel::get_best())));
+            MODEL = Some(Rc::new(RefCell::new(
+                OnDeviceModel::load("renju_15x15_model").expect("Unable to load saved model"),
+            )));
         });
         MODEL.clone().unwrap()
     }
@@ -232,13 +234,13 @@ where
 }
 
 pub struct AiPlayer {
-    tree: Rc<RefCell<MonteCarloTree<PolicyValueModel>>>,
+    tree: Rc<RefCell<MonteCarloTree<OnDeviceModel>>>,
     // temperature parameter in (0, 1] controls the level of exploration
     temperature: f32,
 }
 
 impl AiPlayer {
-    pub fn new(model: Rc<RefCell<PolicyValueModel>>) -> Self {
+    pub fn new(model: Rc<RefCell<OnDeviceModel>>) -> Self {
         let tree = Rc::new(RefCell::new(MonteCarloTree::new(5f32, model)));
         Self {
             tree: tree,
