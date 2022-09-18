@@ -12,6 +12,7 @@
 
     const MARGIN = 50;
     const SIZE = 15.0;
+    let container;
     let boardWidth, boardHeight;
     let stoneWidth, stoneHeight;
     let stoneMatrix = [];
@@ -94,8 +95,9 @@
     };
 
     const onPositionClicked = (evt) => {
-        const horizontal = (evt.clientX - (MARGIN - stoneWidth)) / stoneWidth;
-        const vertical = (evt.clientY - (MARGIN - stoneHeight)) / stoneHeight;
+        const rc = container.getBoundingClientRect();
+        const horizontal = (evt.clientX - rc.x - (MARGIN - stoneWidth)) / stoneWidth;
+        const vertical = (evt.clientY -rc.y - (MARGIN - stoneHeight)) / stoneHeight;
 
         let row, col;
         if (vertical % 1 < 0.4) {
@@ -132,6 +134,7 @@
 <div
     class="squared_board"
     style="background-image: url({boardImage});"
+    bind:this={container}
     bind:clientWidth={boardWidth}
     bind:clientHeight={boardHeight}
     on:click={onPositionClicked}
@@ -161,8 +164,7 @@
 <style>
     .squared_board {
         aspect-ratio: 1 / 1; /* ⏹ a perfect square */
-        max-width: 1000px;
-        max-height: 1000px;
+        height: 100%;
         background-repeat: no-repeat;
         background-size: 100% auto;
         position: relative;

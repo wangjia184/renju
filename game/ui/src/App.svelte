@@ -12,6 +12,7 @@
   let isWonOpen = false;
   let humanPlayBlack = true;
   let blocking = false;
+  let clientHeight = 10;
   const startNewGame = (black) => {
     if (blocking) {
       return;
@@ -36,7 +37,7 @@
 </script>
 
 <main class="d-flex flex-row gap-2 h-100">
-  <div class="justify-content-center align-self-center">
+  <div class="justify-content-center align-self-center h-100" bind:clientHeight={clientHeight} style="width: {clientHeight}px">
     <Board on:over={onGameOver} />
   </div>
   <div class="d-flex flex-column flex-grow-1">

@@ -65,6 +65,10 @@ blas-src = { version = "0.8.0", default-features = false, features = [
 ] }
 
 
+[target.'cfg(target_os = "windows")'.dependencies]
+ndarray = { version = "0.15.6" }
+
+
 [profile.release]
 strip = true      # Automatically strip symbols from the binary.
 opt-level = "z"   # Optimize for size.
