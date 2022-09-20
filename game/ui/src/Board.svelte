@@ -4,7 +4,7 @@
     import whiteImage from "./assets/white.png";
     import { Canvas, Layer, t } from "svelte-canvas";
     import { invoke } from "@tauri-apps/api";
-    import { emit, listen } from "@tauri-apps/api/event";
+    import { listen } from "@tauri-apps/api/event";
     import { onMount } from "svelte";
 
     import { createEventDispatcher } from "svelte";
@@ -12,6 +12,9 @@
 
     const MARGIN = 50;
     const SIZE = 15.0;
+
+    export let display = "";
+
     let container;
     let boardWidth, boardHeight;
     let stoneWidth, stoneHeight;
@@ -32,16 +35,6 @@
         });
         return unlisten;
     });
-
-    const getStoneImage = (color) => {
-        if (color == 1) {
-            return blackImage;
-        }
-        if (color == 2) {
-            return whiteImage;
-        }
-        return "";
-    };
 
     $: renderGrid = ({ context, width, height }) => {
         context.beginPath();
@@ -96,8 +89,10 @@
 
     const onPositionClicked = (evt) => {
         const rc = container.getBoundingClientRect();
-        const horizontal = (evt.clientX - rc.x - (MARGIN - stoneWidth)) / stoneWidth;
-        const vertical = (evt.clientY -rc.y - (MARGIN - stoneHeight)) / stoneHeight;
+        const horizontal =
+            (evt.clientX - rc.x - (MARGIN - stoneWidth)) / stoneWidth;
+        const vertical =
+            (evt.clientY - rc.y - (MARGIN - stoneHeight)) / stoneHeight;
 
         let row, col;
         if (vertical % 1 < 0.4) {
@@ -129,11 +124,15 @@
             });
         }
     };
+
+    const getStoneImage = (value) => {
+        return value > 0 ? (value % 2 == 0 ? whiteImage : blackImage) : "";
+    };
 </script>
 
 <div
-    class="squared_board"
     style="background-image: url({boardImage});"
+    class="squared_board {display}"
     bind:this={container}
     bind:clientWidth={boardWidth}
     bind:clientHeight={boardHeight}
@@ -144,19 +143,24 @@
     </Canvas>
 
     {#each stoneMatrix as rowArray, row}
-        {#each rowArray as color, col}
+        {#each rowArray as value, col}
             <div
-                class="stone {lastMove &&
+                class="stone d-flex justify-content-center align-items-center
+                    {value % 2 > 0 && 'black_stone'}
+                    {value % 2 == 0 && value && 'white_stone'}
+                    {lastMove &&
                     lastMove.length == 2 &&
                     lastMove[0] == row &&
                     lastMove[1] == col &&
                     'last-move'}"
-                style="background-image: url({getStoneImage(color)});
-                left:{MARGIN + (col - 0.5) * stoneWidth + 2}px; 
+                style="background-image : url({getStoneImage(value)});
+                left:{MARGIN + (col - 0.5) * stoneWidth + 2}px;
                 top:{MARGIN + (row - 0.5) * stoneHeight + 2}px; 
                 width:{stoneWidth - 4}px; 
                 height:{stoneHeight - 4}px"
-            />
+            >
+                <span class="stone_number">{value ? value : ""}</span>
+            </div>
         {/each}
     {/each}
 </div>
@@ -173,7 +177,6 @@
 
     .stone {
         position: absolute;
-        display: block;
         background-position: center;
         background-repeat: no-repeat;
         background-size: 85%;
@@ -181,14 +184,33 @@
     }
     .last-move {
         border-radius: 25px;
-        animation: mymove 3s infinite;
+        animation: blink 3s infinite;
+    }
+    .stone_number {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        font-size: 16px;
+        cursor: default;
+        display: none;
+    }
+    :global(.show_number) .stone_number {
+        display: inline-block !important;
     }
 
-    @keyframes mymove {
-        from {
-            background-color: rgb(255, 255, 255, 0.3);
+    .black_stone .stone_number {
+        color: white;
+    }
+    .white_stone .stone_number {
+        color: black;
+    }
+
+    @keyframes blink {
+        0% {
+            background-color: rgb(255, 255, 255, 0);
         }
-        to {
+        50% {
+            background-color: rgb(255, 255, 255, 0.5);
+        }
+        100% {
             background-color: rgb(255, 255, 255, 0);
         }
     }

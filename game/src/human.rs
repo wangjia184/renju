@@ -1,4 +1,4 @@
-use crate::game::{RenjuBoard, SquaredMatrix, TerminalState};
+use crate::game::{RenjuBoard, SquareMatrix, TerminalState};
 use crate::model::OnDeviceModel;
 use crate::player::Player;
 use crate::MonteCarloTree;
@@ -57,14 +57,14 @@ pub struct HumanVsMachineMatch {
 
 #[derive(Clone, Copy, serde::Serialize)]
 pub struct BoardInfo {
-    matrix: SquaredMatrix<u8>,
-    stones: usize,
+    matrix: SquareMatrix<u8>,
+    stones: u8,
     state: MatchState,
     last: Option<(usize, usize)>,
 }
 
 impl BoardInfo {
-    pub fn get_stones(self: &Self) -> usize {
+    pub fn get_stones(self: &Self) -> u8 {
         self.stones
     }
 

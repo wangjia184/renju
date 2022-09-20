@@ -222,7 +222,7 @@ def train(state_batch, prob_batch, score_batch, lr):
         else:
             last = current
     if all_same:
-        print( "WARNING: All scores are the same.", score_batch)
+        print( "WARNING: All scores are the same.")
 
     entropy = -np.mean(np.sum(action_probs * np.log(action_probs + 1e-10), axis=1))
     

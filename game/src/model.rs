@@ -35,7 +35,7 @@ pub trait RenjuModel {
     fn train(
         self: &Self,
         state_tensors: &[StateTensor],
-        prob_matrixes: &[SquaredMatrix],
+        prob_matrixes: &[SquareMatrix],
         scores: &[f32],
         lr: f32,
     ) -> PyResult<(f32, f32)>;
@@ -44,7 +44,7 @@ pub trait RenjuModel {
         self: &Self,
         state_tensors: &[StateTensor],
         use_log_prob: bool, // true to return log probability
-    ) -> PyResult<(SquaredMatrix<f32>, f32)>;
+    ) -> PyResult<(SquareMatrix<f32>, f32)>;
 
     fn export(self: &Self) -> PyResult<Bytes>;
 
@@ -109,7 +109,7 @@ impl RenjuModel for PolicyValueModel {
     fn train(
         self: &Self,
         state_tensors: &[StateTensor],
-        prob_matrixes: &[SquaredMatrix],
+        prob_matrixes: &[SquareMatrix],
         scores: &[f32],
         lr: f32,
     ) -> PyResult<(f32, f32)> {
@@ -135,7 +135,7 @@ impl RenjuModel for PolicyValueModel {
         self: &Self,
         state_tensors: &[StateTensor],
         use_log_prob: bool,
-    ) -> PyResult<(SquaredMatrix<f32>, f32)> {
+    ) -> PyResult<(SquareMatrix<f32>, f32)> {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|py| {
             py.check_signals()?;
@@ -149,7 +149,7 @@ impl RenjuModel for PolicyValueModel {
 
             let log_prob_list = <PyList as PyTryFrom>::try_from(tuple.get_item(0)?)?;
             assert_eq!(log_prob_list.len(), BOARD_SIZE * BOARD_SIZE);
-            let mut log_prob_matrix: SquaredMatrix<f32> = SquaredMatrix::default();
+            let mut log_prob_matrix: SquareMatrix<f32> = SquareMatrix::default();
             for (index, log_prob) in log_prob_list.iter().enumerate() {
                 let mut probability = log_prob.extract::<f32>()?;
                 if use_log_prob {
@@ -253,7 +253,7 @@ impl RenjuModel for OnDeviceModel {
     fn train(
         self: &Self,
         state_tensors: &[StateTensor],
-        prob_matrixes: &[SquaredMatrix],
+        prob_matrixes: &[SquareMatrix],
         scores: &[f32],
         lr: f32,
     ) -> PyResult<(f32, f32)> {
@@ -264,7 +264,7 @@ impl RenjuModel for OnDeviceModel {
         self: &Self,
         state_tensors: &[StateTensor],
         use_log_prob: bool, // true to return log probability
-    ) -> PyResult<(SquaredMatrix<f32>, f32)> {
+    ) -> PyResult<(SquareMatrix<f32>, f32)> {
         assert!(!state_tensors.is_empty());
         assert_eq!(use_log_prob, false);
         let state_batch = Tensor::<f32>::new(&[
@@ -299,7 +299,7 @@ impl RenjuModel for OnDeviceModel {
             [BOARD_SIZE as u64 * BOARD_SIZE as u64]
         );
 
-        let mut matrix = SquaredMatrix::default();
+        let mut matrix = SquareMatrix::default();
         action_tensor.iter().enumerate().for_each(|(index, x)| {
             matrix[index / BOARD_SIZE][index % BOARD_SIZE] = *x;
         });

@@ -1,5 +1,5 @@
 use crate::*;
-use game::{SquaredMatrix, StateTensor};
+use game::{SquareMatrix, StateTensor};
 use std::{borrow::Cow, cell::RefCell, rc::Rc};
 
 pub trait Player {
@@ -84,7 +84,7 @@ pub struct SelfPlayer {
     tree: Rc<RefCell<MonteCarloTree<PolicyValueModel>>>,
     // temperature parameter in (0, 1] controls the level of exploration
     temperature: f32,
-    state_prob_pairs: Vec<(StateTensor, SquaredMatrix)>,
+    state_prob_pairs: Vec<(StateTensor, SquareMatrix)>,
     iterations: u32,
 }
 
@@ -140,7 +140,7 @@ impl SelfPlayer {
 
     pub fn consume<F>(mut self: Self, mut cb: F)
     where
-        F: FnMut(StateTensor, SquaredMatrix),
+        F: FnMut(StateTensor, SquareMatrix),
     {
         while !self.state_prob_pairs.is_empty() {
             let (state_tensor, prob_matrix) = self.state_prob_pairs.swap_remove(0);
@@ -172,7 +172,7 @@ impl Player for SelfPlayer {
             .get_move_probability(self.temperature);
 
         // 15x15 tensor records the probability of each move
-        let mut mcts_prob_matrix = SquaredMatrix::default();
+        let mut mcts_prob_matrix = SquareMatrix::default();
         move_prob_pairs
             .iter()
             .for_each(|((row, col), probability)| {
@@ -196,8 +196,8 @@ impl Player for SelfPlayer {
 
 fn get_equivalents(
     state_tensor: &StateTensor,
-    probability_tensor: &SquaredMatrix,
-) -> Vec<([[[f32; 15]; 15]; 4], SquaredMatrix)> {
+    probability_tensor: &SquareMatrix,
+) -> Vec<([[[f32; 15]; 15]; 4], SquareMatrix)> {
     let mut state_tensor1 = state_tensor.clone();
     let mut probability_tensor1 = probability_tensor.clone();
 
@@ -332,7 +332,7 @@ fn test_get_equivalents() {
         ],
     ];
 
-    let prob_matrix: SquaredMatrix<f32> = [
+    let prob_matrix: SquareMatrix<f32> = [
         [1., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 1.],
         [1., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
         [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
@@ -423,7 +423,7 @@ fn test_get_equivalents() {
         ],
     ];
 
-    let prob_matrix_0: SquaredMatrix<f32> = [
+    let prob_matrix_0: SquareMatrix<f32> = [
         [1., 1., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
         [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
         [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
@@ -443,7 +443,7 @@ fn test_get_equivalents() {
     assert_eq!(state_tensor_0, equivalents[0].0);
     assert_eq!(prob_matrix_0, equivalents[0].1);
 
-    let matrix1: SquaredMatrix<f32> = [
+    let matrix1: SquareMatrix<f32> = [
         [1., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
         [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
         [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
@@ -466,7 +466,7 @@ fn test_get_equivalents() {
     assert_eq!(matrix1, equivalents[1].0[2]);
     assert_eq!(matrix1, equivalents[1].1);
 
-    let matrix2: SquaredMatrix<f32> = [
+    let matrix2: SquareMatrix<f32> = [
         [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 1.],
         [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
         [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
@@ -488,7 +488,7 @@ fn test_get_equivalents() {
     assert_eq!(matrix2, equivalents[2].0[2]);
     assert_eq!(matrix2, equivalents[2].1);
 
-    let matrix3: SquaredMatrix<f32> = [
+    let matrix3: SquareMatrix<f32> = [
         [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 1., 1.],
         [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
         [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
@@ -510,7 +510,7 @@ fn test_get_equivalents() {
     assert_eq!(matrix3, equivalents[3].0[2]);
     assert_eq!(matrix3, equivalents[3].1);
 
-    let matrix4: SquaredMatrix<f32> = [
+    let matrix4: SquareMatrix<f32> = [
         [1., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 1.],
         [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 1.],
         [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
@@ -532,7 +532,7 @@ fn test_get_equivalents() {
     assert_eq!(matrix4, equivalents[4].0[2]);
     assert_eq!(matrix4, equivalents[4].1);
 
-    let matrix5: SquaredMatrix<f32> = [
+    let matrix5: SquareMatrix<f32> = [
         [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
         [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
         [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
@@ -554,7 +554,7 @@ fn test_get_equivalents() {
     assert_eq!(matrix5, equivalents[5].0[2]);
     assert_eq!(matrix5, equivalents[5].1);
 
-    let matrix6: SquaredMatrix<f32> = [
+    let matrix6: SquareMatrix<f32> = [
         [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
         [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
         [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],

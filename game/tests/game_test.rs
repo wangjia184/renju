@@ -4,7 +4,7 @@ mod game_test {
 
     #[test]
     fn test_flip_left_right() {
-        let mut x: SquaredMatrix<u8> = [
+        let mut x: SquareMatrix<u8> = [
             [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -23,7 +23,7 @@ mod game_test {
         ];
         x.flip_left_right();
 
-        let y: SquaredMatrix<u8> = [
+        let y: SquareMatrix<u8> = [
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -46,7 +46,7 @@ mod game_test {
 
     #[test]
     fn test_flip_top_bottom() {
-        let mut x: SquaredMatrix<u8> = [
+        let mut x: SquareMatrix<u8> = [
             [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -65,7 +65,7 @@ mod game_test {
         ];
         x.flip_top_bottom();
 
-        let y: SquaredMatrix<u8> = [
+        let y: SquareMatrix<u8> = [
             [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -88,7 +88,7 @@ mod game_test {
 
     #[test]
     fn test_flip_over_main_diagonal() {
-        let mut x: SquaredMatrix<u8> = [
+        let mut x: SquareMatrix<u8> = [
             [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -107,7 +107,7 @@ mod game_test {
         ];
         x.flip_over_main_diagonal();
 
-        let y: SquaredMatrix<u8> = [
+        let y: SquareMatrix<u8> = [
             [1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -130,7 +130,7 @@ mod game_test {
 
     #[test]
     fn test_flip_over_anti_diagonal() {
-        let mut x: SquaredMatrix<u8> = [
+        let mut x: SquareMatrix<u8> = [
             [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -149,7 +149,7 @@ mod game_test {
         ];
         x.flip_over_anti_diagonal();
 
-        let y: SquaredMatrix<u8> = [
+        let y: SquareMatrix<u8> = [
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -174,7 +174,7 @@ mod game_test {
 
     fn test_check_position_state() {
         #[rustfmt::skip]
-        let mut board : SquaredMatrix<u8> = [
+        let mut board : SquareMatrix<u8> = [
             [0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0],
@@ -248,7 +248,7 @@ mod game_test {
     #[test]
     fn test_forbidden_check2() {
         #[rustfmt::skip]
-        let mut board : SquaredMatrix<u8> = [
+        let mut board : SquareMatrix<u8> = [
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0],
@@ -285,7 +285,7 @@ mod game_test {
     #[test]
     fn test_forbidden_check3() {
         #[rustfmt::skip]
-        let mut board : SquaredMatrix<u8> = [
+        let mut board : SquareMatrix<u8> = [
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -321,7 +321,7 @@ mod game_test {
     #[test]
     fn test_forbidden_check4() {
         #[rustfmt::skip]
-        let mut board : SquaredMatrix<u8> = [
+        let mut board : SquareMatrix<u8> = [
             [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -356,7 +356,7 @@ mod game_test {
     #[test]
     fn test_next_moves() {
         #[rustfmt::skip]
-        let mut board : SquaredMatrix<u8> = [
+        let mut board : SquareMatrix<u8> = [
             [0, 2, 0, 2, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             [0, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],

@@ -14,6 +14,14 @@
   let blocking = false;
   let clientHeight = 10;
   let isAboutOpen = false;
+  let stoneDisplay = "";
+
+  const displayTypes = {
+    "": "None",
+    show_number: "Display Number",
+    show_prob: "Display Probability",
+  };
+
   const startNewGame = (black) => {
     if (blocking) {
       return;
@@ -43,7 +51,7 @@
   <div
     class="justify-content-center align-self-center h-100 position-relative"
     bind:clientHeight
-    style="width: {clientHeight}px"
+    style="width: {clientHeight}px; box-shadow: 0.5rem 0 0.4rem #00000026 !important"
   >
     {#if isWonOpen || isLoseOpen}
       <div
@@ -57,9 +65,9 @@
         {/if}
       </div>
     {/if}
-    <Board on:over={onGameOver} />
+    <Board on:over={onGameOver} display={stoneDisplay} />
   </div>
-  <div class="d-flex flex-column flex-grow-1">
+  <div class="d-flex flex-column flex-grow-1 ps-3">
     <div
       class="top_basket"
       style="background-image: url({humanPlayBlack
@@ -67,20 +75,38 @@
         : blackBasketImage})"
     />
     <div
-      class="flex-grow-1 justify-content-center align-self-center d-flex align-items-center gap-1"
+      class="flex-grow-1 justify-content-center align-self-center d-flex align-items-center flex-column"
     >
-      <Button
-        color="secondary"
-        outline
-        size="sm"
-        on:click={() => (isColorSelectionOpen = true)}>Restart</Button
-      >
-      <Button
-        color="secondary"
-        outline
-        size="sm"
-        on:click={() => (isAboutOpen = true)}>About</Button
-      >
+      <div class="row">
+        {#each Object.entries(displayTypes) as [value, text]}
+          <div class="form-check">
+            <input
+              class="form-check-input"
+              type="radio"
+              name="display_type"
+              id="display_{value}"
+              checked={stoneDisplay == value}
+              {value}
+              on:change={() => (stoneDisplay = value)}
+            />
+            <label class="form-check-label" for="display_{value}">{text}</label>
+          </div>
+        {/each}
+      </div>
+      <div class="d-flex flex-row">
+        <Button
+          color="secondary"
+          outline
+          size="sm"
+          on:click={() => (isColorSelectionOpen = true)}>Restart</Button
+        >
+        <Button
+          color="secondary"
+          outline
+          size="sm"
+          on:click={() => (isAboutOpen = true)}>About</Button
+        >
+      </div>
     </div>
     <div
       class="bottom_basket"

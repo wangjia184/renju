@@ -17,9 +17,9 @@ use crate::player::*;
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct TrainDataItem(
-    StateTensor,   /* 4x15x15 state */
-    SquaredMatrix, /* 15*15 prob per position */
-    f32,           /* winner */
+    StateTensor,  /* 4x15x15 state */
+    SquareMatrix, /* 15*15 prob per position */
+    f32,          /* winner */
 );
 
 impl Into<Bytes> for TrainDataItem {
@@ -81,7 +81,7 @@ impl DataProducer {
                 TerminalState::Draw => 0f32,
                 _ => unreachable!(),
             };
-            black_player.consume(|state_tensor: StateTensor, prob_matrix: SquaredMatrix| {
+            black_player.consume(|state_tensor: StateTensor, prob_matrix: SquareMatrix| {
                 self.tx
                     .send(TrainDataItem(state_tensor, prob_matrix, score))
                     .expect("Failed to send");
@@ -92,7 +92,7 @@ impl DataProducer {
                 TerminalState::Draw => 0f32,
                 _ => unreachable!(),
             };
-            white_player.consume(|state_tensor: StateTensor, prob_matrix: SquaredMatrix| {
+            white_player.consume(|state_tensor: StateTensor, prob_matrix: SquareMatrix| {
                 self.tx
                     .send(TrainDataItem(state_tensor, prob_matrix, score))
                     .expect("Failed to send");
@@ -141,7 +141,7 @@ impl Trainer {
 
             if data_buffer.len() > self.batch_size * 2 {
                 let mut state_tensor_batch = vec![StateTensor::<f32>::default(); self.batch_size];
-                let mut mcts_probs_batch = vec![SquaredMatrix::<f32>::default(); self.batch_size];
+                let mut mcts_probs_batch = vec![SquareMatrix::<f32>::default(); self.batch_size];
                 let mut winner_batch = vec![0f32; self.batch_size];
 
                 // randomly pick a batch

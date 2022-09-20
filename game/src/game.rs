@@ -4,11 +4,12 @@ use std::collections::HashSet;
 pub const BOARD_SIZE: usize = 15;
 
 const DISTANCE: usize = 2;
+const NO_STONE: u8 = 0;
+const AVAILABLE: u8 = 1;
 
-pub type SquaredMatrix<T = f32> = [[T; BOARD_SIZE]; BOARD_SIZE];
-pub type StateTensor<T = f32> = [SquaredMatrix<T>; 4];
+pub type SquareMatrix<T = f32> = [[T; BOARD_SIZE]; BOARD_SIZE];
+pub type StateTensor<T = f32> = [SquareMatrix<T>; 4];
 
-#[repr(u8)]
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Color {
     None = 0,
@@ -18,79 +19,29 @@ pub enum Color {
 
 impl From<u8> for Color {
     fn from(v: u8) -> Self {
-        match v {
-            0 => Color::None,
-            1 => Color::Black,
-            2 => Color::White,
-            _ => panic!("Invalid color value"),
+        if v > 0 {
+            if v % 2 == 0 {
+                Color::White
+            } else {
+                Color::Black
+            }
+        } else {
+            Color::None
         }
     }
 }
 
-impl Into<u8> for Color {
-    fn into(self) -> u8 {
-        self as u8
+impl From<f32> for Color {
+    fn from(v: f32) -> Self {
+        unimplemented!()
     }
 }
 
-pub trait Stone {
-    fn as_color(self: &Self) -> Color;
-    fn from_color(c: Color) -> Self;
-    fn black() -> Self;
-    fn white() -> Self;
-    fn none() -> Self;
-}
-
-impl Stone for u8 {
-    fn as_color(self: &Self) -> Color {
-        match *self {
-            0 => Color::None,
-            1 => Color::Black,
-            2 => Color::White,
-            _ => panic!("Invalid color"),
-        }
-    }
-
-    fn from_color(c: Color) -> Self {
-        c as u8
-    }
-
-    fn black() -> Self {
-        Color::Black as u8
-    }
-    fn white() -> Self {
-        Color::White as u8
-    }
-    fn none() -> Self {
-        Color::None as u8
-    }
-}
-impl Stone for f32 {
-    fn as_color(self: &Self) -> Color {
-        match *self as i64 {
-            0 => Color::None,
-            1 => Color::Black,
-            2 => Color::White,
-            _ => panic!("Invalid color"),
-        }
-    }
-
-    fn from_color(c: Color) -> Self {
-        c as u8 as f32
-    }
-
-    fn black() -> Self {
-        Color::Black as u8 as f32
-    }
-    fn white() -> Self {
-        Color::White as u8 as f32
-    }
-    fn none() -> Self {
-        Color::None as u8 as f32
-    }
-}
-
-pub trait SquaredMatrixExtension<T> {
+pub trait SquaredMatrixExtension<T>
+where
+    T: From<u8>,
+    Color: From<T>,
+{
     fn swap(self: &mut Self, x: (usize, usize), y: (usize, usize));
 
     /*
@@ -148,29 +99,24 @@ pub trait SquaredMatrixExtension<T> {
     ) -> StoneScanResult;
 
     fn is_forbidden(self: &mut Self, position: (usize, usize)) -> bool;
-
-    fn print(self: &Self);
-
-    fn from_base81_string(text: &str) -> Self;
-    fn to_base81_string(self: &Self) -> String;
 }
 
 #[derive(Debug, Clone)]
 pub struct RenjuBoard {
-    matrix: SquaredMatrix<u8>,                // 0=BLANK; 1=BLACK; 2=WHITE
-    available_matrix: SquaredMatrix<u8>,      // available positions, 1=available
+    matrix: SquareMatrix<u8>,                 // 0=BLANK; 1=BLACK; 2=WHITE
+    available_matrix: SquareMatrix<u8>,       // available positions, 1=available
     last_move: Option<(usize, usize)>,        // recent move
-    stones: usize,                            // number of moves
+    stones: u8,                               // number of moves
     black_win_moves: HashSet<(usize, usize)>, // just one black move in specified position to win
     white_win_moves: HashSet<(usize, usize)>, // just one white move in specified position to win
 }
 
 impl Default for RenjuBoard {
     fn default() -> Self {
-        let mut available = SquaredMatrix::default();
-        available[BOARD_SIZE / 2][BOARD_SIZE / 2] = Stone::black();
+        let mut available = SquareMatrix::default();
+        available[BOARD_SIZE / 2][BOARD_SIZE / 2] = AVAILABLE;
         Self {
-            matrix: SquaredMatrix::default(),
+            matrix: SquareMatrix::default(),
             available_matrix: available,
             last_move: None,
             stones: 0,
@@ -268,12 +214,10 @@ impl StoneScanResult {
 }
 
 impl RenjuBoard {
-    pub fn get_matrix(self: &Self) -> &SquaredMatrix<u8> {
+    pub fn get_matrix(self: &Self) -> &SquareMatrix<u8> {
         &self.matrix
     }
-    pub fn print(self: &Self) {
-        self.matrix.print();
-    }
+
     pub fn width(self: &Self) -> usize {
         BOARD_SIZE
     }
@@ -283,9 +227,9 @@ impl RenjuBoard {
     // clear board
     pub fn clear(self: &mut Self) {
         self.last_move = None;
-        self.matrix = SquaredMatrix::default();
-        self.available_matrix = SquaredMatrix::default();
-        self.available_matrix[BOARD_SIZE / 2][BOARD_SIZE / 2] = Stone::black();
+        self.matrix = SquareMatrix::default();
+        self.available_matrix = SquareMatrix::default();
+        self.available_matrix[BOARD_SIZE / 2][BOARD_SIZE / 2] = AVAILABLE;
         self.stones = 0;
     }
 
@@ -298,7 +242,7 @@ impl RenjuBoard {
         self.last_move
     }
 
-    pub fn get_stones(self: &Self) -> usize {
+    pub fn get_stones(self: &Self) -> u8 {
         self.stones
     }
 
@@ -308,7 +252,7 @@ impl RenjuBoard {
         //assert!(
         //    self.available_matrix[pos.0][pos.1] == (Color::Black as u8) || self.last_move.is_none()
         //);
-        assert_eq!(self.matrix[pos.0][pos.1], Color::None as u8);
+        assert_eq!(self.matrix[pos.0][pos.1], NO_STONE);
 
         let color = if (self.stones % 2) == 0 {
             Color::Black
@@ -322,13 +266,9 @@ impl RenjuBoard {
         let mut state = self.matrix.scan_continuous_stone(pos, color);
 
         // update status
-        self.matrix[pos.0][pos.1] = if is_black_turn {
-            Stone::black()
-        } else {
-            Stone::white()
-        };
-        self.last_move = Some(pos);
         self.stones += 1;
+        self.matrix[pos.0][pos.1] = self.stones;
+        self.last_move = Some(pos);
 
         if state.has_won() {
             return if is_black_turn {
@@ -368,18 +308,18 @@ impl RenjuBoard {
         };
         let end_row = cmp::min(BOARD_SIZE - 1, pos.0 + DISTANCE);
         let end_col = cmp::min(BOARD_SIZE - 1, pos.1 + DISTANCE);
-        let none_stone = Stone::none();
+
         for row in start_row..=end_row {
             for col in start_col..=end_col {
-                self.available_matrix[row][col] = if self.matrix[row][col] == none_stone {
-                    Stone::black()
+                self.available_matrix[row][col] = if self.matrix[row][col] == NO_STONE {
+                    AVAILABLE
                 } else {
-                    none_stone
+                    NO_STONE
                 };
             }
         }
 
-        if self.stones >= BOARD_SIZE * BOARD_SIZE {
+        if self.stones as usize >= BOARD_SIZE * BOARD_SIZE {
             TerminalState::Draw
         } else {
             // remove forbidden move. perhaps it was a win move but now it is forbidden
@@ -456,15 +396,14 @@ impl RenjuBoard {
 
         for row in 0..BOARD_SIZE {
             for col in 0..BOARD_SIZE {
-                match self.matrix[row][col].as_color() {
-                    Color::Black => {
-                        state_matrix[black_index][row][col] = 1f32;
+                let val = self.matrix[row][col];
+                if val > NO_STONE {
+                    if val % 2 == 0 {
+                        state_matrix[white_index][row][col] = 1f32; // even is white
+                    } else {
+                        state_matrix[black_index][row][col] = 1f32; // odds is black
                     }
-                    Color::White => {
-                        state_matrix[white_index][row][col] = 1f32;
-                    }
-                    _ => {}
-                };
+                }
             }
         }
 
@@ -480,98 +419,10 @@ impl RenjuBoard {
     }
 }
 
-static BASE81_TABLE: &'static [char] = &[
-    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i',
-    'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', 'A', 'B',
-    'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U',
-    'V', 'W', 'X', 'Y', 'Z', '.', '-', ':', '+', '=', '^', '!', '*', '?', '<', '>', '(', ')', '[',
-    ']', '{', '}', '@', '#',
-];
-
-static BASE81_REVERSE_TABLE: &'static [u8] = &[
-    9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
-    9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
-    9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
-    9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
-    9, 9, 9, 9, 2, 1, 1, 2, 9, 9, 9, 9, 2, 2, 2, 2, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
-    2, 2, 0, 1, 2, 2, 0, 2, 2, 1, 2, 0, 2, 1, 0, 2, 9, 9, 9, 9, 2, 1, 0, 0, 2, 0, 2, 2, 9, 9, 9, 9,
-    0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 2, 0, 0, 2, 0, 0, 0, 2, 1,
-    0, 0, 2, 2, 0, 1, 0, 0, 2, 1, 0, 1, 9, 9, 9, 9, 2, 1, 2, 2, 2, 1, 1, 0, 2, 2, 0, 0, 2, 1, 2, 1,
-    2, 2, 2, 1, 1, 1, 0, 0, 1, 1, 0, 1, 1, 1, 0, 2, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 2, 0,
-    1, 1, 2, 1, 1, 1, 2, 2, 1, 2, 0, 0, 1, 2, 0, 1, 1, 2, 0, 2, 1, 2, 1, 0, 1, 2, 1, 1, 1, 2, 1, 2,
-    1, 2, 2, 0, 1, 2, 2, 1, 1, 2, 2, 2, 2, 0, 0, 0, 2, 0, 0, 1, 2, 0, 0, 2, 2, 0, 1, 0, 2, 0, 1, 1,
-    2, 0, 1, 2, 2, 0, 2, 0, 2, 0, 2, 1, 2, 2, 1, 0, 9, 9, 9, 9, 2, 2, 1, 1, 2, 1, 1, 1, 9, 9, 9, 9,
-    9, 9, 9, 9, 0, 1, 0, 1, 0, 1, 0, 2, 0, 1, 1, 0, 0, 1, 1, 1, 0, 1, 1, 2, 0, 1, 2, 0, 0, 1, 2, 1,
-    0, 1, 2, 2, 0, 2, 0, 0, 0, 2, 0, 1, 0, 2, 0, 2, 0, 2, 1, 0, 0, 2, 1, 1, 0, 2, 1, 2, 0, 2, 2, 0,
-    0, 2, 2, 1, 0, 2, 2, 2, 1, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 2, 1, 0, 1, 0, 1, 0, 1, 1, 1, 0, 1, 2,
-    1, 0, 2, 0, 1, 0, 2, 1, 1, 0, 2, 2, 2, 2, 1, 2, 9, 9, 9, 9, 2, 2, 2, 0,
-];
-
-#[test]
-fn generate_reverse_table() {
-    let mut coll: Vec<_> = BASE81_TABLE
-        .iter()
-        .enumerate()
-        .map(|(index, ch)| {
-            let mut trits: [u8; 4] = [0; 4];
-            trits[0] = u8::try_from(index / 27).unwrap();
-            let num = index % 27;
-            trits[1] = u8::try_from(num / 9).unwrap();
-            let num = num % 9;
-            trits[2] = u8::try_from(num / 3).unwrap();
-            let num = num % 3;
-            trits[3] = u8::try_from(num).unwrap();
-
-            (*ch as u8, trits)
-        })
-        .collect();
-
-    coll.sort_by(|x, y| y.0.cmp(&x.0));
-
-    let first = coll.remove(0);
-    let mut source_code = format!(
-        "{}, {}, {}, {},  ",
-        first.1[0], first.1[1], first.1[2], first.1[3]
-    );
-    let mut count = 0;
-
-    for code in (0..first.0).rev() {
-        if !coll.is_empty() && coll[0].0 == code {
-            let current = coll.remove(0);
-            source_code.insert_str(
-                0,
-                &format!(
-                    "{}, {}, {}, {},  ",
-                    current.1[0], current.1[1], current.1[2], current.1[3]
-                ),
-            );
-        } else {
-            source_code.insert_str(0, "9, 9, 9, 9,  ");
-        }
-        count = count + 1;
-        if count % 5 == 0 {
-            source_code.insert_str(0, "\n");
-        }
-    }
-
-    print!("{}", &source_code);
-}
-
-/*
-#[test]
-fn test_base81() {
-    use rand::Rng; // 0.8.0
-
-    let m = BoardMatrix::from_fn(|_, _| rand::thread_rng().gen_range(0..3));
-    let text = m.to_base81_string();
-    println!("{}", &text);
-
-    assert_eq!(m, BoardMatrixExtension::from_base81_string(&text));
-}
- */
-impl<T> SquaredMatrixExtension<T> for SquaredMatrix<T>
+impl<T> SquaredMatrixExtension<T> for SquareMatrix<T>
 where
-    T: Stone + Copy + bytemuck::Pod + std::fmt::Debug + PartialEq + Default,
+    T: Copy + bytemuck::Pod + std::fmt::Debug + PartialEq + Default + From<u8>,
+    Color: From<T>,
 {
     fn swap(self: &mut Self, x: (usize, usize), y: (usize, usize)) {
         let temp = self[x.0][x.1];
@@ -648,22 +499,22 @@ where
         let mut vectors: [Vec<(usize, usize)>; 5] = Default::default();
 
         let mut current = pos;
-        let mut expected_state = color.into();
+        let mut expected_color = color;
         let mut index = 0;
         while index < vectors.len() {
             match get_neighbor(current) {
                 None => break, // out of board
                 Some((row, col)) => {
-                    let state = self[row][col].as_color();
-                    if state == expected_state {
+                    let current_color = Color::from(self[row][col]);
+                    if current_color == expected_color {
                         current = (row, col);
                         vectors[index].push(current);
                     } else {
                         index += 1;
-                        match state {
-                            Color::White if color == Color::White => expected_state = Color::White,
-                            Color::Black if color == Color::Black => expected_state = Color::Black,
-                            Color::None => expected_state = Color::None,
+                        match current_color {
+                            Color::White if color == Color::White => expected_color = Color::White,
+                            Color::Black if color == Color::Black => expected_color = Color::Black,
+                            Color::None => expected_color = Color::None,
                             _ => break, // opposite player's piece
                         }
                     }
@@ -955,8 +806,12 @@ where
         position: (usize, usize),
         color: Color,
     ) -> StoneScanResult {
-        assert_eq!(self[position.0][position.1].as_color(), Color::None);
-        self[position.0][position.1] = Stone::from_color(color);
+        //assert_eq!(self[position.0][position.1], NO_STONE);
+        self[position.0][position.1] = match color {
+            Color::Black => 255u8.into(),
+            Color::White => 254u8.into(),
+            _ => 0u8.into(),
+        };
 
         let mut state = StoneScanResult::new(color);
 
@@ -1045,7 +900,7 @@ where
         );
 
         // restore
-        self[position.0][position.1] = Stone::none();
+        self[position.0][position.1] = NO_STONE.into();
 
         state
     }
@@ -1055,115 +910,9 @@ where
     // Double four – Black cannot place a stone that builds two separate lines with four black stones in a row.
     // Overline – six or more black stones in a row.
     fn is_forbidden(self: &mut Self, position: (usize, usize)) -> bool {
-        assert_eq!(self[position.0][position.1], Stone::none());
+        //assert_eq!(self[position.0][position.1], NO_STONE);
         let state = self.scan_continuous_stone(position, Color::Black);
         !state.has_five && (state.over_five || state.three_count > 1 || state.four_count > 1)
-    }
-
-    fn from_base81_string(text: &str) -> Self {
-        let mut m = Self::default();
-
-        let mut count = 0;
-        text.chars().rev().enumerate().for_each(|(_, ch)| {
-            for offset in 0..4 {
-                if count < BOARD_SIZE * BOARD_SIZE {
-                    let row = BOARD_SIZE - 1 - count / BOARD_SIZE;
-                    let col = BOARD_SIZE - 1 - (count % BOARD_SIZE);
-                    count = count + 1;
-
-                    let table_index = (ch as usize) * 4 + (4 - 1 - offset);
-                    let value = BASE81_REVERSE_TABLE[table_index];
-                    if value > 2 {
-                        panic!("Invalid value in matrix. {}", value);
-                    }
-                    m[row][col] = Stone::from_color(Color::from(value));
-                }
-            }
-        });
-        m
-    }
-
-    fn print(self: &Self) {
-        let mut text = String::with_capacity((BOARD_SIZE + 1) * (BOARD_SIZE + 2));
-        for i in 0..BOARD_SIZE {
-            if i == 0 {
-                text.push_str("┌");
-            } else {
-                text.push_str("┬");
-            }
-            text.push_str("───");
-        }
-        text.push_str("┐\n");
-        for row in 0..BOARD_SIZE {
-            for col in 0..BOARD_SIZE {
-                text.push_str("│");
-
-                match self[row][col].as_color() {
-                    Color::Black => text.push_str(" O "), // black
-                    Color::White => text.push_str(" X "), // white
-                    Color::None => text.push_str("   "),
-                    _ => panic!("Unexpected value {:?} in matrix", self[row][col]),
-                }
-            }
-            text.push_str("│\n");
-
-            for i in 0..BOARD_SIZE {
-                if i == 0 {
-                    if row < BOARD_SIZE - 1 {
-                        text.push_str("├");
-                    } else {
-                        text.push_str("└");
-                    }
-                } else {
-                    if row < BOARD_SIZE - 1 {
-                        text.push_str("┼");
-                    } else {
-                        text.push_str("┴");
-                    }
-                }
-                text.push_str("───");
-            }
-            if row < BOARD_SIZE - 1 {
-                text.push_str("┤\n");
-            } else {
-                text.push_str("┘\n");
-            }
-        }
-
-        println!("{}", text);
-    }
-
-    // The borad only contains three types of values: 0(blank) 1(black) 2(white)
-    // hence the matrix can be seen as a 225(15*15)-trits ternary array
-    // here convert into base81, which means every 4 trits are mapped into a single letter
-    // then it can be presented in a 57-characters string, much shorter
-    fn to_base81_string(self: &Self) -> String {
-        let mut code: usize = 0;
-        let mut base = 1;
-
-        let mut codes = Vec::with_capacity(BOARD_SIZE * BOARD_SIZE);
-
-        for row in 0..BOARD_SIZE {
-            for col in 0..BOARD_SIZE {
-                // from bottom to top, from right to left
-                let value = self[BOARD_SIZE - row - 1][BOARD_SIZE - col - 1].as_color() as usize;
-                if value > 2 {
-                    panic!("Unexpected value {} in matrix", value);
-                } else {
-                    code = code + value * base;
-                }
-                if base < 27 {
-                    // 3^3, every four-trits convert into a letter
-                    base = base * 3;
-                } else {
-                    codes.push(BASE81_TABLE[code]);
-                    base = 1;
-                    code = 0; // reset
-                }
-            }
-        }
-        codes.push(BASE81_TABLE[code]);
-        codes.into_iter().rev().collect::<String>()
     }
 }
 

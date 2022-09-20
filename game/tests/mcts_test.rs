@@ -22,8 +22,8 @@ impl Default for MockedRenjuModel {
 }
 
 impl MockedRenjuModel {
-    fn generate_prob_matrix(self: &Self) -> SquaredMatrix<f32> {
-        let mut prob_matrix = SquaredMatrix::default();
+    fn generate_prob_matrix(self: &Self) -> SquareMatrix<f32> {
+        let mut prob_matrix = SquareMatrix::default();
 
         let option = self.map.borrow_mut().take();
         assert!(option.is_some());
@@ -38,7 +38,7 @@ impl RenjuModel for MockedRenjuModel {
         self: &Self,
         state_tensors: &[StateTensor],
         use_log_prob: bool, // true to return log probability
-    ) -> PyResult<(SquaredMatrix<f32>, f32)> {
+    ) -> PyResult<(SquareMatrix<f32>, f32)> {
         assert!(!state_tensors.is_empty());
 
         Ok((self.generate_prob_matrix(), self.score))
@@ -47,7 +47,7 @@ impl RenjuModel for MockedRenjuModel {
     fn train(
         self: &Self,
         state_tensors: &[StateTensor],
-        prob_matrixes: &[SquaredMatrix],
+        prob_matrixes: &[SquareMatrix],
         scores: &[f32],
         lr: f32,
     ) -> PyResult<(f32, f32)> {
