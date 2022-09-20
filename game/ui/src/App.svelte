@@ -2,15 +2,9 @@
   import Board from "./Board.svelte";
   import blackBasketImage from "./assets/black_basket.png";
   import whiteBasketImage from "./assets/white_basket.png";
-  import lostImage from "./assets/lost.gif";
-  import wonImage from "./assets/won.gif";
-  import {
-    Button,
-    Modal,
-    ModalBody,
-    ModalHeader,
-    Offcanvas,
-  } from "sveltestrap";
+  import lostImage from "./assets/youlost.png";
+  import wonImage from "./assets/youwon.png";
+  import { Button, Modal, ModalBody, ModalHeader } from "sveltestrap";
   import { invoke } from "@tauri-apps/api";
 
   let isColorSelectionOpen = true;
@@ -35,20 +29,34 @@
   const onGameOver = (evt) => {
     if (evt.detail == "HumanWon") {
       isWonOpen = true;
+      setTimeout(() => (isWonOpen = false), 6000);
     } else if (evt.detail == "MachineWon") {
       isLoseOpen = true;
+      setTimeout(() => (isLoseOpen = false), 9000);
     } else {
       // TODO : draw
     }
   };
 </script>
 
-<main class="d-flex flex-row gap-2 h-100">
+<main class="d-flex flex-row gap-2 h-100 ">
   <div
-    class="justify-content-center align-self-center h-100"
+    class="justify-content-center align-self-center h-100 position-relative"
     bind:clientHeight
     style="width: {clientHeight}px"
   >
+    {#if isWonOpen || isLoseOpen}
+      <div
+        class="position-absolute top-0 bottom-0 start-0 end-0 d-flex align-items-center adjust-content-center justify-content-center"
+        style="z-index:1000"
+      >
+        {#if isWonOpen}
+          <img class="won_animated_text" src={wonImage} alt="You won!" />
+        {:else if isLoseOpen}
+          <img class="lost_animated_text" src={lostImage} alt="You lost!" />
+        {/if}
+      </div>
+    {/if}
     <Board on:over={onGameOver} />
   </div>
   <div class="d-flex flex-column flex-grow-1">
@@ -138,24 +146,6 @@
   </ModalBody>
 </Modal>
 
-<Offcanvas
-  isOpen={isWonOpen}
-  placement="top"
-  header="Congratulations! You Won!"
-  toggle={() => (isWonOpen = !isWonOpen)}
->
-  <div class="w-100 h-100 won_lost" style="background-image:url({wonImage})" />
-</Offcanvas>
-
-<Offcanvas
-  isOpen={isLoseOpen}
-  placement="top"
-  header="Oh No! You Lost!"
-  toggle={() => (isLoseOpen = !isLoseOpen)}
->
-  <div class="w-100 h-100 won_lost" style="background-image:url({lostImage})" />
-</Offcanvas>
-
 <style>
   .top_basket {
     width: 100%;
@@ -182,9 +172,33 @@
     opacity: 1;
   }
 
-  .won_lost {
-    background-size: 100%;
-    background-repeat: no-repeat;
-    background-position: center;
+  .won_animated_text {
+    animation: won_frames 1s ease-in-out infinite;
+  }
+  @keyframes won_frames {
+    0% {
+      transform: scale(1);
+    }
+    50% {
+      transform: scale(1.5);
+    }
+    100% {
+      transform: scale(1);
+    }
+  }
+
+  .lost_animated_text {
+    animation: lost_frames 3s ease-in-out infinite;
+  }
+  @keyframes lost_frames {
+    0% {
+      transform: scale(1);
+    }
+    50% {
+      transform: scale(1.2);
+    }
+    100% {
+      transform: scale(1);
+    }
   }
 </style>

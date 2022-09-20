@@ -100,7 +100,7 @@ async fn main() {
                                 match read {
                                     Ok(data) => {
                                         *latest_parameters.lock().unwrap() = Some(data.freeze());
-                                        println!("Model parameters have been updated");
+                                        //println!("Model parameters have been updated");
                                     }
                                     Err(e) => {
                                         eprintln!("Connection is lost: {}", e);

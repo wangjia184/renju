@@ -3,7 +3,7 @@ use std::collections::HashSet;
 
 pub const BOARD_SIZE: usize = 15;
 
-const DISTANCE: usize = 1;
+const DISTANCE: usize = 2;
 
 pub type SquaredMatrix<T = f32> = [[T; BOARD_SIZE]; BOARD_SIZE];
 pub type StateTensor<T = f32> = [SquaredMatrix<T>; 4];
