@@ -281,7 +281,7 @@ def save_model(folder_name):
                 'predict': renju.predict.get_concrete_function()
             })
 
-#with open("best.ckpt", mode='rb') as file:
-#    buffer = file.read()
-#    import_parameters(buffer)
-#save_model('renju_15x15_model')
+with open("best.ckpt", mode='rb') as file:
+    buffer = file.read()
+    import_parameters(buffer)
+save_model('renju_15x15_model_2')

@@ -252,10 +252,10 @@ impl OnDeviceModel {
 impl RenjuModel for OnDeviceModel {
     fn train(
         self: &Self,
-        state_tensors: &[StateTensor],
-        prob_matrixes: &[SquareMatrix],
-        scores: &[f32],
-        lr: f32,
+        _state_tensors: &[StateTensor],
+        _prob_matrixes: &[SquareMatrix],
+        _scores: &[f32],
+        _lr: f32,
     ) -> PyResult<(f32, f32)> {
         unimplemented!()
     }

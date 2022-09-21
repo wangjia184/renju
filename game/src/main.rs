@@ -17,18 +17,15 @@ use tokio::sync::watch::{self, Receiver};
 use tokio::time::{sleep, Duration};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
+mod contest;
 mod game;
 mod mcts;
 mod player;
-
 mod train;
-use game::{RenjuBoard, SquaredMatrixExtension, StateTensor, TerminalState};
-use mcts::MonteCarloTree;
 
 use train::{DataProducer, TrainDataItem, Trainer};
-mod model;
-use model::{PolicyValueModel, RenjuModel};
 mod human;
+mod model;
 use human::{BoardInfo, MatchState};
 
 static ABOUT_TEXT: &str = "Renju game ";
@@ -65,6 +62,18 @@ enum Verb {
         /// tcp port to listen on
         #[clap(default_value_t = 55590)]
         port: u16,
+    },
+
+    /// contest between two model
+    #[clap()]
+    Contest {
+        /// old model name
+        #[clap(required = true)]
+        old_model: String,
+
+        /// new model name
+        #[clap(required = true)]
+        new_model: String,
     },
 }
 
@@ -167,6 +176,11 @@ async fn main() {
             server.run().await.expect("Unable to accept connection");
             drop(children);
         }
+
+        Some(Verb::Contest {
+            old_model,
+            new_model,
+        }) => contest::run(&old_model, &new_model),
 
         _ => {
             tauri::Builder::default()
@@ -315,9 +329,9 @@ async fn do_move(window: tauri::Window, pos: (usize, usize)) -> MatchState {
 
     let seconds = match board_info.get_stones() {
         0..=3 => 3,
-        4..=6 => 5,
-        7..=14 => 10,
-        _ => 15,
+        4..=6 => 7,
+        7..=14 => 15,
+        _ => 20,
     };
 
     window.emit("board_updated", board_info).unwrap();

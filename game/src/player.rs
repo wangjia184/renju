@@ -1,7 +1,8 @@
-use crate::*;
-use game::{SquareMatrix, StateTensor};
+use crate::game::{RenjuBoard, SquareMatrix, SquaredMatrixExtension, StateTensor, TerminalState};
+use crate::mcts::MonteCarloTree;
+use crate::model::RenjuModel;
+use std::cmp::Ordering;
 use std::{borrow::Cow, cell::RefCell, rc::Rc};
-
 pub trait Player {
     fn do_next_move(
         self: &mut Self,
@@ -58,15 +59,12 @@ where
 
                 match state {
                     TerminalState::BlackWon => {
-                        //self.board.print();
                         return state;
                     }
                     TerminalState::WhiteWon => {
-                        //self.board.print();
                         return state;
                     }
                     TerminalState::Draw => {
-                        //self.board.print();
                         return state;
                     }
                     _ => continue,
@@ -79,17 +77,23 @@ where
 }
 
 // play with self to produce training data
-pub struct SelfPlayer {
-    model: Rc<RefCell<PolicyValueModel>>,
-    tree: Rc<RefCell<MonteCarloTree<PolicyValueModel>>>,
+pub struct SelfPlayer<M>
+where
+    M: RenjuModel,
+{
+    model: Rc<RefCell<M>>,
+    tree: Rc<RefCell<MonteCarloTree<M>>>,
     // temperature parameter in (0, 1] controls the level of exploration
     temperature: f32,
     state_prob_pairs: Vec<(StateTensor, SquareMatrix)>,
     iterations: u32,
 }
 
-impl SelfPlayer {
-    pub fn new_pair(model: Rc<RefCell<PolicyValueModel>>) -> (Self, Self) {
+impl<M> SelfPlayer<M>
+where
+    M: RenjuModel,
+{
+    pub fn new_pair(model: Rc<RefCell<M>>) -> (Self, Self) {
         let tree = Rc::new(RefCell::new(MonteCarloTree::new(5f32, model.clone())));
         (
             Self {
@@ -97,14 +101,14 @@ impl SelfPlayer {
                 tree: tree.clone(),
                 temperature: 1e-3,
                 state_prob_pairs: Vec::with_capacity(100),
-                iterations: 500u32,
+                iterations: 2000u32,
             },
             Self {
                 model: model,
                 tree: tree,
                 temperature: 1e-3,
                 state_prob_pairs: Vec::with_capacity(100),
-                iterations: 500u32,
+                iterations: 2000u32,
             },
         )
     }
@@ -155,14 +159,16 @@ impl SelfPlayer {
     }
 }
 
-impl Player for SelfPlayer {
+impl<M> Player for SelfPlayer<M>
+where
+    M: RenjuModel,
+{
     fn do_next_move(
         self: &mut Self,
         board: &mut RenjuBoard,
         choices: &Vec<(usize, usize)>,
     ) -> (usize, usize) {
         for _ in 0..self.iterations {
-            // TODO : avoid heap allocation, use stack only
             self.tree.borrow_mut().rollout(board.clone(), choices);
         }
 
@@ -191,6 +197,80 @@ impl Player for SelfPlayer {
     fn notify_opponent_moved(self: &mut Self, _: &RenjuBoard, _: (usize, usize)) {
         // black and white are sharing the same tree, no need to update
         //self.tree.borrow_mut().update_with_position(pos);
+    }
+}
+
+pub struct AiPlayer<M>
+where
+    M: RenjuModel,
+{
+    tree: Rc<RefCell<MonteCarloTree<M>>>,
+    // temperature parameter in (0, 1] controls the level of exploration
+    temperature: f32,
+    last_visit_times: SquareMatrix<u32>,
+    iterations: u32,
+}
+
+impl<M> AiPlayer<M>
+where
+    M: RenjuModel,
+{
+    pub fn get_visit_times(self: &Self) -> SquareMatrix<u32> {
+        self.last_visit_times
+    }
+    pub fn new(model: Rc<RefCell<M>>, iterations: u32) -> Self {
+        let tree = Rc::new(RefCell::new(MonteCarloTree::new(5f32, model)));
+        Self {
+            tree: tree,
+            temperature: 1e-3,
+            last_visit_times: SquareMatrix::default(),
+            iterations: iterations,
+        }
+    }
+
+    pub fn rollout(self: &mut Self, board: RenjuBoard, choices: &Vec<(usize, usize)>) {
+        self.tree.borrow_mut().rollout(board, choices)
+    }
+}
+
+impl<M> Player for AiPlayer<M>
+where
+    M: RenjuModel,
+{
+    fn do_next_move(
+        self: &mut Self,
+        board: &mut RenjuBoard,
+        choices: &Vec<(usize, usize)>,
+    ) -> (usize, usize) {
+        let pos = if choices.len() == 1 {
+            choices[0]
+        } else {
+            for _ in 0..self.iterations {
+                self.tree.borrow_mut().rollout(board.clone(), choices);
+            }
+            let move_prob_pairs: Vec<((usize, usize), f32)> = self
+                .tree
+                .borrow_mut()
+                .get_move_probability(self.temperature);
+
+            let pair = move_prob_pairs
+                .into_iter()
+                .max_by(|(_, left_score), (_, right_score)| {
+                    left_score
+                        .partial_cmp(right_score)
+                        .unwrap_or(Ordering::Equal)
+                })
+                .expect("At least one pair");
+            pair.0
+        };
+
+        self.last_visit_times = self.tree.borrow().get_visit_times();
+        self.tree.borrow_mut().update_with_position(pos);
+        pos
+    }
+
+    fn notify_opponent_moved(self: &mut Self, _: &RenjuBoard, pos: (usize, usize)) {
+        self.tree.borrow_mut().update_with_position(pos);
     }
 }
 
