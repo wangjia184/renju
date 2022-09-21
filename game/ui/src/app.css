@@ -78,7 +78,27 @@
 *,
 ::after,
 ::before {
-    box-sizing: border-box
+    box-sizing: border-box;
+}
+
+* {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+}
+
+input,
+textarea
+
+/*.contenteditable?*/
+    {
+    -webkit-touch-callout: default;
+    -webkit-user-select: text;
+    -moz-user-select: text;
+    -ms-user-select: text;
+    user-select: text;
 }
 
 @media (prefers-reduced-motion:no-preference) {

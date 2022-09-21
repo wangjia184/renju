@@ -18,8 +18,8 @@
 
   const displayTypes = {
     "": "None",
-    show_number: "Display Number",
-    show_prob: "Display Probability",
+    show_number: "Show Number",
+    show_visit_times: "Show Visit Times",
   };
 
   const startNewGame = (black) => {
@@ -67,7 +67,7 @@
     {/if}
     <Board on:over={onGameOver} display={stoneDisplay} />
   </div>
-  <div class="d-flex flex-column flex-grow-1 ps-3">
+  <div class="d-flex flex-column flex-grow-1 px-3">
     <div
       class="top_basket"
       style="background-image: url({humanPlayBlack
@@ -93,7 +93,7 @@
           </div>
         {/each}
       </div>
-      <div class="d-flex flex-row">
+      <div class="d-flex flex-row mt-3 gap-1">
         <Button
           color="secondary"
           outline
@@ -153,18 +153,38 @@
         &#22522;&#20110;&#38376;&#29305;&#21345;&#27931;&#25628;&#32034;&#26641;&#19982;&#21367;&#31215;&#31070;&#32463;&#32593;&#32476;&#30340;&#24102;&#31105;&#25163;&#20116;&#23376;&#26827;&#28216;&#25103;&#65292;&#23454;&#36341;&#24378;&#21270;&#23398;&#20064;&#21450;&#20854;&#29702;&#35770;&#12290;
       </li>
       <li>
-        &#20316;&#32773;&#65306;&#26480;&#29790;&#29579;
-        https://github.com/wangjia184/renju
+        &#20316;&#32773;&#65306; <a
+          href="https://github.com/wangjia184/renju"
+          class="link-dark"
+          target="_blank">++</a
+        >
       </li>
-      <li>&#21442;&#32771;&#36164;&#26009;&#65306;</li>
+
       <li>
+        &#21442;&#32771;&#36164;&#26009;&#65306;<br />
         <ol>
-          <li>https://joshvarty.github.io/AlphaZero/</li>
           <li>
-            https://jonathan-hui.medium.com/alphago-zero-a-game-changer-14ef6e45eba5
+            <a
+              class="link-secondary"
+              href="https://joshvarty.github.io/AlphaZero/"
+              target="_blank"
+              >AlphaZero - A step-by-step look at Alpha Zero and Monte Carlo
+              Tree Search</a
+            >
           </li>
           <li>
-            https://jonathan-hui.medium.com/alphago-how-it-works-technically-26ddcc085319
+            <a
+              class="link-secondary"
+              href="https://jonathan-hui.medium.com/alphago-zero-a-game-changer-14ef6e45eba5"
+              target="_blank">AlphaGo Zero — a game changer. (How it works?)</a
+            >
+          </li>
+          <li>
+            <a
+              class="link-secondary"
+              href="https://jonathan-hui.medium.com/alphago-how-it-works-technically-26ddcc085319"
+              target="_blank">AlphaGo: How it works technically?</a
+            >
           </li>
         </ol>
       </li>

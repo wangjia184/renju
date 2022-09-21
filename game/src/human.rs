@@ -61,6 +61,7 @@ pub struct BoardInfo {
     stones: u8,
     state: MatchState,
     last: Option<(usize, usize)>,
+    visited: SquareMatrix<u32>,
 }
 
 impl BoardInfo {
@@ -102,6 +103,7 @@ impl HumanVsMachineMatch {
             stones: self.board.get_stones(),
             state: self.state,
             last: self.board.get_last_move(),
+            visited: self.ai_player.get_visit_times(),
         }
     }
 
@@ -237,14 +239,19 @@ pub struct AiPlayer {
     tree: Rc<RefCell<MonteCarloTree<OnDeviceModel>>>,
     // temperature parameter in (0, 1] controls the level of exploration
     temperature: f32,
+    last_visit_times: SquareMatrix<u32>,
 }
 
 impl AiPlayer {
+    pub fn get_visit_times(self: &Self) -> SquareMatrix<u32> {
+        self.last_visit_times
+    }
     pub fn new(model: Rc<RefCell<OnDeviceModel>>) -> Self {
         let tree = Rc::new(RefCell::new(MonteCarloTree::new(5f32, model)));
         Self {
             tree: tree,
             temperature: 1e-3,
+            last_visit_times: SquareMatrix::default(),
         }
     }
 
@@ -278,6 +285,7 @@ impl Player for AiPlayer {
             pair.0
         };
 
+        self.last_visit_times = self.tree.borrow().get_visit_times();
         self.tree.borrow_mut().update_with_position(pos);
         pos
     }

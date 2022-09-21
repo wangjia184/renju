@@ -1,5 +1,5 @@
-use crate::*;
-
+use crate::game::{RenjuBoard, SquareMatrix, StateTensor, TerminalState};
+use crate::model::RenjuModel;
 use core::cell::RefCell;
 use std::{
     collections::HashMap,
@@ -131,15 +131,18 @@ impl TreeNode {
         // u = visit-count-adjusted prior score
         let u = match &self.parent {
             Some(parent) => {
-                let parent_visit_times = parent
+                let parent = parent
                     .upgrade()
-                    .expect("Unable to upgrade weak reference of parent node")
-                    .as_ref()
-                    .borrow()
-                    .visit_times;
+                    .expect("Unable to upgrade weak reference of parent node");
 
-                c_puct * self.probability * f32::sqrt(parent_visit_times as f32)
-                    / (1f32 + self.visit_times as f32)
+                if self.visit_times == 0 && parent.borrow().is_root() {
+                    f32::MAX
+                } else {
+                    let parent_visit_times = parent.as_ref().borrow().visit_times;
+
+                    c_puct * self.probability * f32::sqrt(parent_visit_times as f32)
+                        / (1f32 + self.visit_times as f32)
+                }
             }
             None => 0f32,
         };
@@ -287,6 +290,18 @@ where
         };
 
         node.borrow_mut().update_recursive(evaluation_score);
+    }
+
+    pub fn get_visit_times(self: &Self) -> SquareMatrix<u32> {
+        let mut matrix = SquareMatrix::default();
+        // calc the move probabilities based on visit counts at the root node
+        self.root
+            .borrow()
+            .children
+            .iter()
+            .for_each(|((row, col), child)| matrix[*row][*col] = child.borrow().visit_times);
+
+        matrix
     }
 
     // temperature parameter in (0, 1] controls the level of exploration

@@ -19,6 +19,7 @@
     let boardWidth, boardHeight;
     let stoneWidth, stoneHeight;
     let stoneMatrix = [];
+    let visitMatrix = [];
     let blocking = false;
     let state = "";
     let lastMove = null;
@@ -29,6 +30,7 @@
         const unlisten = await listen("board_updated", (evt) => {
             if (evt.payload) {
                 stoneMatrix = evt.payload.matrix;
+                visitMatrix = evt.payload.visited;
                 state = evt.payload.state;
                 lastMove = evt.payload.last;
             }
@@ -160,6 +162,21 @@
                 height:{stoneHeight - 4}px"
             >
                 <span class="stone_number">{value ? value : ""}</span>
+                {#if visitMatrix[row][col] > 0}
+                    <span class="visit_times">
+                        {#if visitMatrix[row][col] > 10000000}
+                            {(visitMatrix[row][col] / 1000000).toFixed(0)} M
+                        {:else if visitMatrix[row][col] > 1000000}
+                            {(visitMatrix[row][col] / 1000000).toFixed(1)} M
+                        {:else if visitMatrix[row][col] > 10000}
+                            {(visitMatrix[row][col] / 1000).toFixed(0)} K
+                        {:else if visitMatrix[row][col] > 1000}
+                            {(visitMatrix[row][col] / 1000).toFixed(1)} K
+                        {:else}
+                            {visitMatrix[row][col]}
+                        {/if}
+                    </span>
+                {/if}
             </div>
         {/each}
     {/each}
@@ -192,7 +209,19 @@
         cursor: default;
         display: none;
     }
+    .visit_times {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        font-size: 12px;
+        cursor: default;
+        color: #66ff66;
+        text-shadow: 1px 1px 1px black, -1px -1px 1px black, -1px 1px 1px black,
+            1px -1px 1px black;
+        display: none;
+    }
     :global(.show_number) .stone_number {
+        display: inline-block !important;
+    }
+    :global(.show_visit_times) .visit_times {
         display: inline-block !important;
     }
 
@@ -201,6 +230,9 @@
     }
     .white_stone .stone_number {
         color: black;
+    }
+    .black_stone .visit_times {
+        text-shadow: none;
     }
 
     @keyframes blink {
