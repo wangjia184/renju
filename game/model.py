@@ -284,4 +284,4 @@ def save_model(folder_name):
 with open("best.ckpt", mode='rb') as file:
     buffer = file.read()
     import_parameters(buffer)
-save_model('renju_15x15_model_2')
+save_model('renju_15x15_model')

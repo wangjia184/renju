@@ -13,11 +13,25 @@ pub fn run(old_model_path: &str, new_model_path: &str) {
             .expect(&format!("Unable to load model {}", new_model_path)),
     ));
 
-    let mut old_player = AiPlayer::new(old_model, 1000);
-    let mut new_player = AiPlayer::new(new_model, 1000);
+    let mut old_player = AiPlayer::new(old_model.clone(), 2000);
+    let mut new_player = AiPlayer::new(new_model.clone(), 2000);
 
-    println!("Old model play black; new model play white");
+    println!(
+        "{} plays black;{} plays white",
+        new_model_path, old_model_path
+    );
     let mut one_match = Match::new(&mut new_player, &mut old_player);
+    let state = one_match.play_to_end();
+    println!("Result = {:?}", state);
+
+    let mut old_player = AiPlayer::new(old_model.clone(), 2000);
+    let mut new_player = AiPlayer::new(new_model.clone(), 2000);
+
+    println!(
+        "{} plays black;{} plays white",
+        old_model_path, new_model_path
+    );
+    let mut one_match = Match::new(&mut old_player, &mut new_player);
     let state = one_match.play_to_end();
     println!("Result = {:?}", state);
 }
