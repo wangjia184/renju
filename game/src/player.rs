@@ -1,6 +1,10 @@
 use crate::game::{RenjuBoard, SquareMatrix, SquaredMatrixExtension, StateTensor, TerminalState};
 use crate::mcts::MonteCarloTree;
 use crate::model::RenjuModel;
+
+use rand::distributions::WeightedIndex;
+use rand::prelude::*;
+use rand_distr::Dirichlet;
 use std::cmp::Ordering;
 use std::{borrow::Cow, cell::RefCell, rc::Rc};
 pub trait Player {
@@ -113,6 +117,26 @@ where
         )
     }
 
+    fn choose_with_dirichlet_noice(probabilities: &Vec<f32>) -> usize {
+        assert!(probabilities.len() > 1);
+        let concentration = vec![0.3f32; probabilities.len()];
+        let dirichlet = Dirichlet::new(&concentration).unwrap();
+        let samples = dirichlet.sample(&mut rand::thread_rng());
+
+        assert_eq!(samples.len(), probabilities.len());
+
+        let probabilities: Vec<f32> = probabilities
+            .iter()
+            .enumerate()
+            .map(|(index, prob)| *prob * 0.75 + 0.25 * samples[index])
+            .collect();
+
+        let dist = WeightedIndex::new(&probabilities).unwrap();
+
+        let mut rng = thread_rng();
+        dist.sample(&mut rng)
+    }
+
     // For self-player, choose a position by probabilities with dirichlet noice
     fn pick_move(
         self: &Self,
@@ -127,11 +151,7 @@ where
 
             let vector: Vec<_> = pairs.iter().map(|(_, probability)| *probability).collect();
 
-            let index = self
-                .model
-                .borrow()
-                .random_choose_with_dirichlet_noice(&vector)
-                .expect("random_choose_with_dirichlet_noice failed");
+            let index = Self::choose_with_dirichlet_noice(&vector);
 
             let pos = pairs[index].0;
             if !board.is_forbidden(pos) {

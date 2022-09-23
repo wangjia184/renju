@@ -61,10 +61,6 @@ impl RenjuModel for MockedRenjuModel {
     fn import(self: &Self, buffer: Bytes) -> PyResult<()> {
         unimplemented!();
     }
-
-    fn random_choose_with_dirichlet_noice(self: &Self, probs: &[f32]) -> PyResult<usize> {
-        unimplemented!();
-    }
 }
 
 #[test]
