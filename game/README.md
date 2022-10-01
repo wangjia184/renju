@@ -1,8 +1,6 @@
-# 对弈生成器，数据用于初始化策略网络
-
-https://zhuanlan.zhihu.com/p/59567014
-
-https://gist.github.com/lnshi/eb3dea05d99daba5c932bbc786cc3701
+https://joshvarty.github.io/AlphaZero/
+https://jonathan-hui.medium.com/alphago-zero-a-game-changer-14ef6e45eba5
+https://jonathan-hui.medium.com/alphago-how-it-works-technically-26ddcc085319
 
 ```
 sudo mkdir -p /usr/local/lib/libtensorflow-cpu-darwin-arm64-2.9.0
