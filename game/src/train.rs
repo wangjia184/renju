@@ -7,7 +7,7 @@ use std::io::prelude::*;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
-use std::{cell::RefCell, rc::Rc};
+
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::watch::Sender;
 
@@ -58,23 +58,22 @@ impl DataProducer {
             latest_parameters,
         )
     }
-    pub fn run(self: &mut Self) {
-        let model = PolicyValueModel::get_best();
-        let model = Rc::new(RefCell::new(model));
-
+    pub async fn run(self: &mut Self) {
         loop {
+            let model = PolicyValueModel::get_best();
             let option = self.latest_parameters.lock().unwrap().take();
             if let Some(latest_parameter) = option {
                 if latest_parameter.len() > 0 {
                     model
-                        .borrow()
                         .import(latest_parameter)
                         .expect("Unable to import parameter");
                 }
             }
 
-            let (mut black_player, mut white_player) = SelfPlayer::new_pair(model.clone());
-            let state = Match::new(&mut black_player, &mut white_player).play_to_end();
+            let (mut black_player, mut white_player) = SelfPlayer::new_pair(model);
+            let state = SelfPlayMatch::new(&mut black_player, &mut white_player)
+                .play_to_end()
+                .await;
             let score = match &state {
                 TerminalState::BlackWon => 1f32,
                 TerminalState::WhiteWon => -1f32,

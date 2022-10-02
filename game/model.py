@@ -161,14 +161,7 @@ def create_model(board_width, board_height):
                 restored_tensors[var.name] = restored
             return checkpoint_path
 
-        @tf.function(input_signature=[tf.TensorSpec(shape=[None], dtype=tf.float32)])
-        def random_choose_with_dirichlet_noice(self, probs):
-            concentration = 0.3*tf.ones(tf.size(probs))
-            dist = tfp.distributions.Dirichlet(concentration)
-            p = 0.75*probs + 0.25*dist.sample(1)[0]
-            samples = tf.random.categorical(tf.math.log([p]), 1)
-            return samples[0] # selected index
-
+    
         @tf.function(input_signature=[
             tf.TensorSpec([None, 4, board_height, board_width], tf.float32),
         ])
@@ -268,9 +261,6 @@ def import_parameters(buffer):
     renju.model.set_weights(pickle.loads(buffer))
     return
 
-def random_choose_with_dirichlet_noice(probs):
-    return renju.random_choose_with_dirichlet_noice(tf.convert_to_tensor(probs))
-
 def save_model(folder_name):
     #Saving the model, explictly adding the concrete functions as signatures
     renju.model.save(folder_name, 
@@ -281,7 +271,7 @@ def save_model(folder_name):
                 'predict': renju.predict.get_concrete_function()
             })
 
-with open("best.ckpt", mode='rb') as file:
-    buffer = file.read()
-    import_parameters(buffer)
-save_model('renju_15x15_model')
+#with open("best.ckpt", mode='rb') as file:
+#    buffer = file.read()
+#    import_parameters(buffer)
+#save_model('renju_15x15_model')

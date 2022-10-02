@@ -1,10 +1,9 @@
 use crate::game::{RenjuBoard, SquareMatrix, StateTensor, TerminalState};
 use crate::model::RenjuModel;
 use atomicbox::AtomicBox;
-use core::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Weak as ArcWeak};
-use std::{collections::HashMap, rc::Rc};
+use std::sync::{Arc, RwLock, Weak as ArcWeak};
 use tokio::sync::oneshot::error::RecvError;
 use tokio::sync::oneshot::{self, Receiver, Sender};
 
@@ -38,7 +37,7 @@ impl ThreadSafeTreeNode {
 
         let node = Arc::new(AtomicBox::new(Box::new(rx)));
 
-        let mut child = ThreadSafeTreeNode {
+        let child = ThreadSafeTreeNode {
             stones: 0,
             action: None,
             parent: None,
@@ -217,32 +216,33 @@ impl ThreadSafeTreeNode {
 // Monte Carlo tree search
 pub struct MonteCarloTree<M>
 where
-    M: RenjuModel,
+    M: RenjuModel + Send,
 {
     model: M,
     c_puct: f32,
-    root: Arc<AtomicBox<Receiver<ThreadSafeTreeNode>>>,
+    root: RwLock<Arc<AtomicBox<Receiver<ThreadSafeTreeNode>>>>,
 }
 
 impl<M> MonteCarloTree<M>
 where
-    M: RenjuModel,
+    M: RenjuModel + Send,
 {
     pub fn new(c_puct: f32, model: M) -> Self {
         Self {
             c_puct: c_puct,
-            root: ThreadSafeTreeNode::new(1f32),
+            root: RwLock::new(ThreadSafeTreeNode::new(1f32)),
             model: model,
         }
     }
 
     pub async fn rollout(
-        self: &mut Self,
+        self: &Self,
         mut board: RenjuBoard,
         choices: &Vec<(usize, usize)>,
     ) -> Result<(), RecvError> {
+        let root = self.root.read().unwrap().clone();
         let (sender, mut node, moves) =
-            ThreadSafeTreeNode::greedy_select_leaf(&self.root, self.c_puct).await?;
+            ThreadSafeTreeNode::greedy_select_leaf(&root, self.c_puct).await?;
 
         //assert_eq!(board.get_last_move(), root.action);
 
@@ -323,7 +323,8 @@ where
     pub async fn get_visit_times(self: &Self) -> Result<SquareMatrix<u32>, RecvError> {
         let mut matrix = SquareMatrix::default();
         // get visit times of direct children of root
-        ThreadSafeTreeNode::enumerate_children(&self.root, |(row, col), child| {
+        let root = self.root.read().unwrap().clone();
+        ThreadSafeTreeNode::enumerate_children(&root, |(row, col), child| {
             matrix[*row][*col] = child.visit_times;
         })
         .await?;
@@ -332,13 +333,14 @@ where
 
     // temperature parameter in (0, 1] controls the level of exploration
     pub async fn get_move_probability(
-        self: &mut Self,
+        self: &Self,
         temperature: f32,
     ) -> Result<Vec<((usize, usize) /*pos*/, f32 /* probability */)>, RecvError> {
         let mut pairs = Vec::with_capacity(50);
         let mut max_log_visit_times = 0f32;
         // calc the move probabilities based on visit counts in top level
-        ThreadSafeTreeNode::enumerate_children(&self.root, |pos, child| {
+        let root = self.root.read().unwrap().clone();
+        ThreadSafeTreeNode::enumerate_children(&root, |pos, child| {
             let log_visit_times =
                 1f32 / temperature * (1e-10 /*avoid zero*/ + child.visit_times as f32).ln();
             if log_visit_times > max_log_visit_times {
@@ -362,12 +364,10 @@ where
         Ok(pairs)
     }
 
-    pub async fn update_with_position(
-        self: &mut Self,
-        pos: (usize, usize),
-    ) -> Result<(), RecvError> {
+    pub async fn update_with_position(self: &Self, pos: (usize, usize)) -> Result<(), RecvError> {
         let (_, rx) = oneshot::channel();
-        let prev_rx = self.root.swap(Box::new(rx), Ordering::Relaxed);
+        let root = self.root.read().unwrap().clone();
+        let prev_rx = root.swap(Box::new(rx), Ordering::Relaxed);
 
         let mut node = prev_rx.await?;
 
@@ -385,7 +385,7 @@ where
         child.parent = None;
         tx.send(child).unwrap();
 
-        self.root = child_ref;
+        *self.root.write().unwrap() = child_ref;
 
         Ok(())
     }

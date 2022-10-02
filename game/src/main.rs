@@ -8,6 +8,7 @@ extern crate tensorflow;
 use bytes::Bytes;
 use clap::{Parser, Subcommand};
 
+use futures::future::BoxFuture;
 use futures::SinkExt;
 use futures_util::stream::StreamExt;
 use tokio::net::{TcpListener, TcpStream};
@@ -26,7 +27,8 @@ mod train;
 use train::{DataProducer, TrainDataItem, Trainer};
 mod human;
 mod model;
-use human::{BoardInfo, MatchState};
+
+use human::{BoardInfo, HumanVsMachineMatch, MatchState};
 
 static ABOUT_TEXT: &str = "Renju game ";
 
@@ -307,22 +309,26 @@ impl TcpServer {
 async fn new_match(window: tauri::Window, black: bool) {
     human::start_new_match(black);
 
-    let board_info: Box<BoardInfo> = human::execute(Box::new(move |m| {
-        if !black {
-            m.machine_move();
-        }
-        Box::new(m.get_board())
-    }))
-    .await;
+    let board_info: Box<BoardInfo> =
+        human::execute(Box::new(move |m: &mut HumanVsMachineMatch| {
+            Box::pin(async {
+                if !black {
+                    m.machine_move();
+                }
+
+                m.get_board()
+            })
+        }))
+        .await;
     window.emit("board_updated", board_info).unwrap();
 }
 
 #[tauri::command]
 async fn do_move(window: tauri::Window, pos: (usize, usize)) -> MatchState {
-    let board_info: Box<BoardInfo> = human::execute(Box::new(move |m| {
+    let board_info: Box<BoardInfo> = human::execute(move |m: &mut HumanVsMachineMatch| {
         m.human_move(pos);
         Box::new(m.get_board())
-    }))
+    })
     .await;
 
     let mut state = board_info.get_state();
@@ -340,11 +346,12 @@ async fn do_move(window: tauri::Window, pos: (usize, usize)) -> MatchState {
     {
         sleep(Duration::from_secs(seconds)).await;
 
-        let board_info: Box<BoardInfo> = human::execute(Box::new(|m| {
-            m.machine_move();
-            Box::new(m.get_board())
-        }))
-        .await;
+        let board_info: Box<BoardInfo> =
+            human::execute(Box::new(move |m: &mut HumanVsMachineMatch| {
+                m.machine_move().await;
+                Box::new(m.get_board())
+            }))
+            .await;
 
         state = board_info.get_state();
         window.emit("board_updated", board_info).unwrap();

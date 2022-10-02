@@ -1,14 +1,12 @@
 use crate::game::{RenjuBoard, SquareMatrix, TerminalState};
 
 use crate::model::OnDeviceModel;
-use crate::player::{AiPlayer, Player};
+use crate::player::AiPlayer;
 
 use std::any::Any;
-use std::cell::RefCell;
 
-use std::rc::Rc;
+use futures::future::BoxFuture;
 use std::sync::Mutex;
-use std::sync::Once;
 use tokio::sync::mpsc::{self, error::TryRecvError, UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
 
@@ -16,21 +14,8 @@ static SENDER: Mutex<
     Option<UnboundedSender<(CallbackFunction, oneshot::Sender<Box<dyn Any + Send>>)>>,
 > = Mutex::new(None);
 
-type CallbackFunction = Box<dyn FnMut(&mut HumanVsMachineMatch) -> Box<dyn Any + Send> + Send>;
-
-static mut MODEL: Option<Rc<RefCell<OnDeviceModel>>> = None;
-static INIT: Once = Once::new();
-
-fn get_model() -> Rc<RefCell<OnDeviceModel>> {
-    unsafe {
-        INIT.call_once(|| {
-            MODEL = Some(Rc::new(RefCell::new(
-                OnDeviceModel::load("renju_15x15_model").expect("Unable to load saved model"),
-            )));
-        });
-        MODEL.clone().unwrap()
-    }
-}
+type CallbackFunction =
+    Box<dyn FnMut(&mut HumanVsMachineMatch) -> BoxFuture<Box<dyn Any + Send>> + Send>;
 
 pub fn start_new_match(human_play_black: bool) {
     let (tx, rx) = mpsc::unbounded_channel();
@@ -77,8 +62,9 @@ impl BoardInfo {
 
 impl HumanVsMachineMatch {
     pub fn new(human_play_black: bool) -> Self {
-        let model = get_model();
-        let ai_player = AiPlayer::new(model.clone(), 0 /*we will rollout manually */);
+        let model = OnDeviceModel::load("renju_15x15_model").expect("Unable to load saved model");
+
+        let ai_player = AiPlayer::new(model, 0 /*we will rollout manually */);
         let instance = Self {
             ai_player: ai_player,
             board: RenjuBoard::default(),
@@ -108,13 +94,15 @@ impl HumanVsMachineMatch {
         }
     }
 
-    pub fn rollout(self: &mut Self) {
-        self.ai_player.rollout(self.board.clone(), &self.choices)
+    pub async fn rollout(self: &mut Self) {
+        self.ai_player
+            .rollout(self.board.clone(), &self.choices)
+            .await
     }
 
-    pub fn human_move(self: &mut Self, pos: (usize, usize)) -> MatchState {
+    pub async fn human_move(self: &mut Self, pos: (usize, usize)) -> MatchState {
         assert_eq!(self.state, MatchState::HumanThinking);
-        self.ai_player.notify_opponent_moved(&self.board, pos);
+        self.ai_player.notify_opponent_moved(&self.board, pos).await;
         match self.board.do_move(pos) {
             TerminalState::AvailableMoves(choices) => {
                 self.choices = choices;
@@ -141,11 +129,14 @@ impl HumanVsMachineMatch {
         self.state
     }
 
-    pub fn machine_move(self: &mut Self) -> MatchState {
+    pub async fn machine_move(self: &mut Self) -> MatchState {
         assert_eq!(self.state, MatchState::MachineThinking);
         assert!(!self.choices.is_empty());
 
-        let pos = self.ai_player.do_next_move(&mut self.board, &self.choices);
+        let pos = self
+            .ai_player
+            .do_next_move(&mut self.board, &self.choices)
+            .await;
         match self.board.do_move(pos) {
             TerminalState::AvailableMoves(choices) => {
                 self.choices = choices;
@@ -180,7 +171,7 @@ impl HumanVsMachineMatch {
     }
 }
 
-fn run(
+async fn run(
     mut rx: UnboundedReceiver<(CallbackFunction, oneshot::Sender<Box<dyn Any + Send>>)>,
     human_play_black: bool,
 ) {
@@ -189,7 +180,7 @@ fn run(
         loop {
             match rx.try_recv() {
                 Ok((mut func, reply_tx)) => {
-                    let ret = func(&mut instance);
+                    let ret = func(&mut instance).await;
                     if let Err(_) = reply_tx.send(ret) {
                         println!("reply_tx.send() failed. run() exited");
                         return; // this thread exits
@@ -208,7 +199,7 @@ fn run(
         if !instance.is_thinking() {
             match rx.blocking_recv() {
                 Some((mut func, reply_tx)) => {
-                    let ret = func(&mut instance);
+                    let ret = func(&mut instance).await;
                     if let Err(_) = reply_tx.send(ret) {
                         println!("reply_tx.send() failed. run() exited");
                         return; // this thread exits
@@ -217,7 +208,7 @@ fn run(
                 _ => return,
             };
         } else {
-            instance.rollout();
+            instance.rollout().await;
         }
     }
 }
