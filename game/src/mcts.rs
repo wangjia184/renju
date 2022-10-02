@@ -1,17 +1,20 @@
 use crate::game::{RenjuBoard, SquareMatrix, StateTensor, TerminalState};
 use crate::model::RenjuModel;
+use atomicbox::AtomicBox;
 use core::cell::RefCell;
-use std::{
-    collections::HashMap,
-    rc::{Rc, Weak},
-};
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Weak as ArcWeak};
+use std::{collections::HashMap, rc::Rc};
+use tokio::sync::oneshot::error::RecvError;
+use tokio::sync::oneshot::{self, Receiver, Sender};
 
-pub struct TreeNode {
+#[derive(Debug)]
+pub struct ThreadSafeTreeNode {
+    stones: u32, // number of stones on board without couting this node
     action: Option<(usize, usize)>,
-    parent: Option<Weak<RefCell<TreeNode>>>, // None if this is a root node
-    children: HashMap<(usize /*row*/, usize /*col*/), Rc<RefCell<TreeNode>>>,
-    current: Option<Weak<RefCell<TreeNode>>>,
-    stones: u32,      // number of stones on board without couting this node
+    parent: Option<ArcWeak<AtomicBox<Receiver<Self>>>>,
+    current: ArcWeak<AtomicBox<Receiver<Self>>>,
+    children: HashMap<(usize /*row*/, usize /*col*/), Arc<AtomicBox<Receiver<Self>>>>,
     visit_times: u32, // number of visited times
     probability: f32, // prior probability from policy network
 
@@ -23,159 +26,191 @@ pub struct TreeNode {
     // The first half of the equation will do exactly that:
     // the action that currently has the highest estimated reward will be the chosen action.
     q: f32, // the exploitation part of the equation. average of evaluations of all leaves
+
+    // WATCH THE UNOBSERVED: A SIMPLE APPROACH TO PARALLELIZING MONTE CARLO TREE SEARCH
+    // the number of rollouts that have been initiated but not yet completed, which we name as unobserved samples.
+    unobserved_times: u32,
 }
 
-impl TreeNode {
-    pub fn new(probability: f32) -> Rc<RefCell<TreeNode>> {
-        let node = TreeNode {
+impl ThreadSafeTreeNode {
+    fn new(prob: f32) -> Arc<AtomicBox<Receiver<Self>>> {
+        let (tx, rx) = oneshot::channel();
+
+        let node = Arc::new(AtomicBox::new(Box::new(rx)));
+
+        let mut child = ThreadSafeTreeNode {
+            stones: 0,
             action: None,
             parent: None,
+            current: Arc::downgrade(&node),
             children: HashMap::new(),
-            current: None,
-            stones: 0,
+            unobserved_times: 0,
             visit_times: 0,
-            probability: probability,
+            probability: prob,
             q: 0f32,
-            //u: 0f32,
         };
-        let instance = Rc::new(RefCell::new(node));
-        instance.borrow_mut().current = Some(Rc::downgrade(&instance));
-        instance
+        tx.send(child).unwrap();
+        node
     }
 
-    pub fn new_child(pos: (usize, usize), probability: f32) -> Rc<RefCell<TreeNode>> {
-        let node = TreeNode {
-            action: Some(pos),
-            parent: None,
-            children: HashMap::new(),
-            current: None,
-            stones: 0,
-            visit_times: 0,
-            probability: probability,
-            q: 0f32,
-            //u: 0f32,
-        };
-        let instance = Rc::new(RefCell::new(node));
-        instance.borrow_mut().current = Some(Rc::downgrade(&instance));
-        instance
-    }
-
-    // Create a new child
-    pub fn create_child(
-        self: &mut TreeNode,
+    // create a child
+    fn create_child<F>(
+        self: &mut Self,
         pos: (usize, usize),
-        probability: f32,
-    ) -> Rc<RefCell<TreeNode>> {
-        let instance = TreeNode::new_child(pos, probability);
-        self.append_child(pos, instance.clone());
-        instance
+        mut init: F,
+    ) -> Arc<AtomicBox<Receiver<Self>>>
+    where
+        F: FnMut(&mut ThreadSafeTreeNode),
+    {
+        let (tx, rx) = oneshot::channel();
+
+        let node = Arc::new(AtomicBox::new(Box::new(rx)));
+
+        let mut child = ThreadSafeTreeNode {
+            stones: self.stones + 1,
+            action: Some(pos),
+            parent: Some(self.current.clone()), // link to this one
+            current: Arc::downgrade(&node),
+            children: HashMap::new(),
+            unobserved_times: 0,
+            visit_times: 0,
+            probability: 0f32,
+            q: 0f32,
+        };
+        init(&mut child);
+
+        self.children.insert(pos, node.clone());
+        tx.send(child).unwrap();
+        node
     }
 
-    // Append a child
-    fn append_child(self: &mut TreeNode, pos: (usize, usize), child: Rc<RefCell<TreeNode>>) {
-        assert!(self.current.is_some());
-        // link child node to this one
-        {
-            let mut node = child.borrow_mut();
-            node.parent = Some(self.current.as_ref().unwrap().clone());
-            node.stones = self.stones + 1;
+    // recursively access from specific node to its all ancestors till root
+    async fn recursive_access<F>(self: &mut Self, mut cb: F) -> Result<(), RecvError>
+    where
+        F: FnMut(&mut Self) + Send,
+    {
+        cb(self);
+        let mut parent_box = self.parent.as_ref().and_then(|x| x.upgrade());
+
+        while let Some(parent) = parent_box {
+            let (tx, rx) = oneshot::channel();
+            let prev_rx = parent.swap(Box::new(rx), Ordering::Relaxed);
+            let mut parent_node = prev_rx.await?;
+            cb(&mut parent_node);
+            parent_box = parent_node.parent.as_ref().and_then(|x| x.upgrade());
+            tx.send(parent_node).unwrap();
         }
-        child.borrow_mut().parent = Some(self.current.as_ref().unwrap().clone());
-        self.children.insert(pos, child);
+
+        Ok(())
     }
 
-    #[allow(dead_code)]
-    // Determine if this is a leaf node
-    pub fn is_leaf(self: &TreeNode) -> bool {
-        self.children.len() == 0
-    }
+    pub async fn back_propagate(self: &mut Self, leaf_value: f32) -> Result<(), RecvError> {
+        self.recursive_access(|node| {
+            node.unobserved_times -= 1;
+            node.visit_times += 1;
 
-    #[allow(dead_code)]
-    // Determine if this is root node
-    pub fn is_root(self: &TreeNode) -> bool {
-        self.parent.is_none()
-    }
-
-    // Update node values from leaf evaluation.
-    // leaf_value: the value of subtree evaluation from the current player's perspective.
-    pub fn update(self: &mut TreeNode, leaf_value: f32) {
-        self.visit_times += 1;
-        // q is the avarage score(evaluabl) in visit_times, initially q is zero
-        // q = sum(value) / n
-        // Progressive update : new_q = (value - old_q) / n + old_q
-        self.q += 1.0 * (leaf_value - self.q) / (self.visit_times as f32);
-    }
-
-    // Like a call to update(), but applied recursively for all ancestors.
-    pub fn update_recursive(self: &mut TreeNode, leaf_value: f32) {
-        // If it is not root, this node's parent should be updated first.
-        if let Some(parent) = &self.parent {
-            let parent = parent
-                .upgrade()
-                .expect("Unable to upgrade weak reference of parent node");
-            // Odd and even levels in the tree are from different players (black/white)
-            // the leaf node is current turn player. The parent node is opposite player's move
-            // hence the value must multiple -1 when traverse from bottom to top
-            parent.borrow_mut().update_recursive(-leaf_value);
-        }
-        self.update(leaf_value);
+            // q is the avarage score(evaluabl) in visit_times, initially q is zero
+            // q = sum(value) / n
+            // Progressive update : new_q = (value - old_q) / n + old_q
+            node.q += 1.0 * (leaf_value - node.q) / (node.visit_times as f32);
+        })
+        .await
     }
 
     // Calculate and return the value for this node.
     // It is a combination of leaf evaluations Q, and this node's prior adjusted for its visit count, u.
     // c_puct: a number in (0, inf) controlling the relative impact of value Q, and prior probability P, on this node's score.
-    pub fn compute_score(self: &Self, c_puct: f32) -> f32 {
+    fn compute_score(self: &Self, c_puct: f32, parent_visit_times: u32) -> f32 {
         // The second half of the equation adds exploration,
         // with the degree of exploration being controlled by the hyper-parameter ‘c’.
         // Effectively this part of the equation provides a measure of the uncertainty for the action’s reward estimate.
         // u = visit-count-adjusted prior score
-        let u = match &self.parent {
-            Some(parent) => {
-                let parent = parent
-                    .upgrade()
-                    .expect("Unable to upgrade weak reference of parent node");
-
-                if self.visit_times == 0 && parent.borrow().is_root() {
-                    f32::MAX
-                } else {
-                    let parent_visit_times = parent.as_ref().borrow().visit_times;
-
-                    c_puct * self.probability * f32::sqrt(parent_visit_times as f32)
-                        / (1f32 + self.visit_times as f32)
-                }
-            }
-            None => 0f32,
-        };
+        let u = c_puct
+            * self.probability
+            * f32::sqrt(parent_visit_times as f32 + self.unobserved_times as f32)
+            / (1f32 + self.visit_times as f32 + self.unobserved_times as f32);
         return self.q + u;
     }
 
-    /// Select a child with max UCB(Q+U)
-    pub fn select(self: &Self, c_puct: f32) -> Option<((usize, usize), Rc<RefCell<TreeNode>>)> {
+    /// Select a direct child with max UCB(Q+U)
+    async fn select(self: &Self, c_puct: f32) -> Result<Option<(Sender<Self>, Self)>, RecvError> {
+        let mut selected: Option<(Sender<Self>, _)> = None;
         let mut max_score = f32::MIN;
-        let mut selected_pair: Option<((usize, usize), Rc<RefCell<TreeNode>>)> = None;
 
-        for (pos, child) in &self.children {
-            let score = child.borrow().compute_score(c_puct);
+        // order is important here. be careful to avoid dead lock
+        for (_, child) in &self.children {
+            let (tx, rx) = oneshot::channel();
+            let prev_rx = child.swap(Box::new(rx), Ordering::Relaxed);
+            let child_node = prev_rx.await?;
+
+            let score = child_node.compute_score(c_puct, self.visit_times);
             if score > max_score {
                 max_score = score;
-                selected_pair = Some((*pos, child.clone()));
+
+                if let Some((existing_tx, existing_node)) = selected.take() {
+                    existing_tx.send(existing_node).unwrap(); // release non-max one
+                }
+                selected = Some((tx, child_node));
+            } else {
+                tx.send(child_node).unwrap(); // release non-max one
             }
         }
 
-        selected_pair
+        Ok(selected)
     }
 
-    #[allow(dead_code)]
-    pub fn get_q(self: &Self) -> f32 {
-        self.q
+    async fn greedy_select_leaf(
+        self_ref: &Arc<AtomicBox<Receiver<Self>>>,
+        c_puct: f32,
+    ) -> Result<(Sender<Self>, Self, Vec<(usize, usize)>), RecvError> {
+        let (mut sender, rx) = oneshot::channel();
+        let prev_rx = self_ref.swap(Box::new(rx), Ordering::Relaxed);
+
+        let mut moves = Vec::with_capacity(20);
+
+        let mut current_node = prev_rx.await?;
+        current_node.unobserved_times += 1;
+        loop {
+            match current_node.select(c_puct).await? {
+                Some((tx, child_node)) => {
+                    sender.send(current_node).unwrap();
+                    sender = tx;
+                    current_node = child_node;
+                    current_node.unobserved_times += 1;
+                    moves.push(current_node.action.unwrap());
+                }
+                None => {
+                    break;
+                }
+            };
+        }
+
+        Ok((sender, current_node, moves))
     }
-    #[allow(dead_code)]
-    pub fn get_action(self: &Self) -> Option<(usize, usize)> {
-        self.action
-    }
-    #[allow(dead_code)]
-    pub fn get_child(self: &Self, pos: (usize, usize)) -> Option<Rc<RefCell<TreeNode>>> {
-        self.children.get(&pos).and_then(|x| Some(x.clone()))
+
+    async fn enumerate_children<F>(
+        self_ref: &Arc<AtomicBox<Receiver<Self>>>,
+        mut cb: F,
+    ) -> Result<(), RecvError>
+    where
+        F: FnMut(&(usize, usize), &Self),
+    {
+        let (sender, rx) = oneshot::channel();
+        let prev_rx = self_ref.swap(Box::new(rx), Ordering::Relaxed);
+
+        let current_node = prev_rx.await?;
+
+        // order is important here. be careful to avoid dead lock
+        for (pos, child) in &current_node.children {
+            let (tx, rx) = oneshot::channel();
+            let prev_rx = child.swap(Box::new(rx), Ordering::Relaxed);
+            let child_node = prev_rx.await?;
+            cb(pos, &child_node);
+            tx.send(child_node).unwrap();
+        }
+        sender.send(current_node).unwrap();
+
+        Ok(())
     }
 }
 
@@ -184,49 +219,38 @@ pub struct MonteCarloTree<M>
 where
     M: RenjuModel,
 {
-    model: Rc<RefCell<M>>,
+    model: M,
     c_puct: f32,
-    root: Rc<RefCell<TreeNode>>,
+    root: Arc<AtomicBox<Receiver<ThreadSafeTreeNode>>>,
 }
 
 impl<M> MonteCarloTree<M>
 where
     M: RenjuModel,
 {
-    pub fn new(c_puct: f32, model: Rc<RefCell<M>>) -> Self {
+    pub fn new(c_puct: f32, model: M) -> Self {
         Self {
             c_puct: c_puct,
-            root: TreeNode::new(1f32),
+            root: ThreadSafeTreeNode::new(1f32),
             model: model,
         }
     }
-    #[allow(dead_code)]
-    pub fn get_root(self: &Self) -> Rc<RefCell<TreeNode>> {
-        self.root.clone()
-    }
 
-    pub fn rollout(self: &mut Self, mut board: RenjuBoard, choices: &Vec<(usize, usize)>) {
-        let mut node = self.root.clone();
-        assert_eq!(board.get_last_move(), node.borrow().action);
+    pub async fn rollout(
+        self: &mut Self,
+        mut board: RenjuBoard,
+        choices: &Vec<(usize, usize)>,
+    ) -> Result<(), RecvError> {
+        let (sender, mut node, moves) =
+            ThreadSafeTreeNode::greedy_select_leaf(&self.root, self.c_puct).await?;
+
+        //assert_eq!(board.get_last_move(), root.action);
 
         let mut state: Option<TerminalState> = None;
-        if !node.borrow().children.is_empty() {
-            loop {
-                // Greedily select next move.
-                let child = match node.borrow().select(self.c_puct) {
-                    None => {
-                        break;
-                    } // leaf
-                    Some((pos, c)) => {
-                        state = Some(board.do_move(pos));
-                        c
-                    }
-                };
-                node = child;
-                if state.as_ref().unwrap().is_over() {
-                    break;
-                }
-            }
+        if !moves.is_empty() {
+            moves.into_iter().for_each(|pos| {
+                state = Some(board.do_move(pos));
+            });
         } else {
             if choices.len() > 1 {
                 //println!("Never explored before");
@@ -250,7 +274,6 @@ where
 
                 let (prob_matrix, score) = self
                     .model
-                    .borrow()
                     .predict(&state_tensor, false)
                     .expect("Failed to predict");
 
@@ -263,7 +286,9 @@ where
                 // extend children
                 for (row, col) in choices {
                     let probability = prob_matrix[row][col];
-                    node.borrow_mut().create_child((row, col), probability);
+                    node.create_child((row, col), |child| {
+                        child.probability = probability;
+                    });
                 }
             }
             TerminalState::Draw => {
@@ -289,119 +314,79 @@ where
             }
         };
 
-        node.borrow_mut().update_recursive(evaluation_score);
+        node.back_propagate(evaluation_score).await?;
+
+        sender.send(node).unwrap();
+        Ok(())
     }
 
-    pub fn get_visit_times(self: &Self) -> SquareMatrix<u32> {
+    pub async fn get_visit_times(self: &Self) -> Result<SquareMatrix<u32>, RecvError> {
         let mut matrix = SquareMatrix::default();
-        // calc the move probabilities based on visit counts at the root node
-        self.root
-            .borrow()
-            .children
-            .iter()
-            .for_each(|((row, col), child)| matrix[*row][*col] = child.borrow().visit_times);
-
-        matrix
+        // get visit times of direct children of root
+        ThreadSafeTreeNode::enumerate_children(&self.root, |(row, col), child| {
+            matrix[*row][*col] = child.visit_times;
+        })
+        .await?;
+        Ok(matrix)
     }
 
     // temperature parameter in (0, 1] controls the level of exploration
-    pub fn get_move_probability(
+    pub async fn get_move_probability(
         self: &mut Self,
         temperature: f32,
-    ) -> Vec<((usize, usize) /*pos*/, f32 /* probability */)> {
+    ) -> Result<Vec<((usize, usize) /*pos*/, f32 /* probability */)>, RecvError> {
+        let mut pairs = Vec::with_capacity(50);
         let mut max_log_visit_times = 0f32;
-        // calc the move probabilities based on visit counts at the root node
-        let pairs: Vec<_> = self
-            .root
-            .borrow()
-            .children
-            .iter()
-            .map(|(pos, child)| {
-                let log_visit_times = 1f32 / temperature
-                    * (1e-10 /*avoid zero*/ + child.borrow().visit_times as f32).ln();
-                if log_visit_times > max_log_visit_times {
-                    max_log_visit_times = log_visit_times;
-                }
-                (*pos, log_visit_times)
-            })
-            .collect();
+        // calc the move probabilities based on visit counts in top level
+        ThreadSafeTreeNode::enumerate_children(&self.root, |pos, child| {
+            let log_visit_times =
+                1f32 / temperature * (1e-10 /*avoid zero*/ + child.visit_times as f32).ln();
+            if log_visit_times > max_log_visit_times {
+                max_log_visit_times = log_visit_times;
+            }
+            pairs.push((*pos, log_visit_times));
+        })
+        .await?;
 
         // softmax
         let mut sum = 0f32;
-        let mut pairs: Vec<_> = pairs
-            .into_iter()
-            .map(|(pos, log_visit_times)| {
-                let prob = (log_visit_times - max_log_visit_times).exp();
-                sum += prob;
-                (pos, prob)
-            })
-            .collect();
+        for (_, log_visit_times) in &mut pairs {
+            *log_visit_times = (*log_visit_times - max_log_visit_times).exp();
+            sum += *log_visit_times;
+        }
 
-        pairs.iter_mut().for_each(|(_, prob)| {
+        for (_, prob) in &mut pairs {
             *prob /= sum;
-        });
+        }
 
-        pairs
+        Ok(pairs)
     }
 
-    pub fn update_with_position(self: &mut Self, pos: (usize, usize)) {
-        let child = {
-            let mut r = self.root.borrow_mut();
+    pub async fn update_with_position(
+        self: &mut Self,
+        pos: (usize, usize),
+    ) -> Result<(), RecvError> {
+        let (_, rx) = oneshot::channel();
+        let prev_rx = self.root.swap(Box::new(rx), Ordering::Relaxed);
 
-            r.children
+        let mut node = prev_rx.await?;
+
+        let child_ref = {
+            node.children
                 .remove(&pos)
-                .or_else(|| Some(r.create_child(pos, 0f32)))
+                .or_else(|| Some(node.create_child(pos, |_| {})))
                 .unwrap()
         };
 
-        self.root.borrow_mut().children.clear(); // free all other children
-        if let Ok(cell) = Rc::try_unwrap(child) {
-            let mut node = cell.into_inner();
-            node.parent = None;
-            self.root.replace(node);
-            self.root.borrow_mut().current = Some(Rc::downgrade(&self.root));
-            self.root
-                .borrow_mut()
-                .children
-                .iter_mut()
-                .for_each(|(_, child)| {
-                    child.borrow_mut().parent = Some(Rc::downgrade(&self.root));
-                });
-        } else {
-            unreachable!("There must be only one strong reference to child node");
-        }
-    }
-}
+        let (tx, rx) = oneshot::channel();
+        let prev_rx = child_ref.swap(Box::new(rx), Ordering::Relaxed);
 
-// for integration test only
-#[cfg(test)]
-#[allow(dead_code)]
-impl TreeNode {
-    pub fn get_visit_times(self: &Self) -> u32 {
-        self.visit_times
-    }
-    pub fn get_probability(self: &Self) -> f32 {
-        self.probability
-    }
-    pub fn get_parent(self: &Self) -> Option<Rc<RefCell<TreeNode>>> {
-        if let Some(ref parent) = self.parent {
-            return parent.upgrade();
-        }
-        None
-    }
+        let mut child = prev_rx.await?;
+        child.parent = None;
+        tx.send(child).unwrap();
 
-    pub fn get_children(
-        self: &Self,
-    ) -> HashMap<(usize /*row*/, usize /*col*/), Rc<RefCell<TreeNode>>> {
-        self.children.clone()
-    }
+        self.root = child_ref;
 
-    pub fn get_current(self: &Self) -> Rc<RefCell<TreeNode>> {
-        if let Some(ref current) = self.current {
-            if let Some(current) = current.upgrade() {
-                return current;
-            }
-        }
-        unreachable!("Current node must exists");
+        Ok(())
     }
 }

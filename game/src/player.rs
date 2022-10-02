@@ -2,9 +2,12 @@ use crate::game::{RenjuBoard, SquareMatrix, SquaredMatrixExtension, StateTensor,
 use crate::mcts::MonteCarloTree;
 use crate::model::RenjuModel;
 use std::cmp::Ordering;
+use std::sync::{Arc, RwLock};
 use std::{borrow::Cow, cell::RefCell, rc::Rc};
+
+#[async_trait::async_trait]
 pub trait Player {
-    fn do_next_move(
+    async fn do_next_move(
         self: &mut Self,
         board: &mut RenjuBoard,
         choices: &Vec<(usize, usize)>,
@@ -37,16 +40,16 @@ where
         }
     }
 
-    pub fn play_to_end(self: &mut Self) -> TerminalState {
+    pub async fn play_to_end(self: &mut Self) -> TerminalState {
         let mut state = TerminalState::default();
 
         loop {
             let is_black_turn = self.board.is_black_turn();
             if let TerminalState::AvailableMoves(ref moves) = state {
                 let pos = if is_black_turn {
-                    self.black_player.do_next_move(&mut self.board, moves)
+                    self.black_player.do_next_move(&mut self.board, moves).await
                 } else {
-                    self.white_player.do_next_move(&mut self.board, moves)
+                    self.white_player.do_next_move(&mut self.board, moves).await
                 };
 
                 state = self.board.do_move(pos);
@@ -81,8 +84,7 @@ pub struct SelfPlayer<M>
 where
     M: RenjuModel,
 {
-    model: Rc<RefCell<M>>,
-    tree: Rc<RefCell<MonteCarloTree<M>>>,
+    tree: Arc<MonteCarloTree<M>>,
     // temperature parameter in (0, 1] controls the level of exploration
     temperature: f32,
     state_prob_pairs: Vec<(StateTensor, SquareMatrix)>,
@@ -93,22 +95,20 @@ impl<M> SelfPlayer<M>
 where
     M: RenjuModel,
 {
-    pub fn new_pair(model: Rc<RefCell<M>>) -> (Self, Self) {
-        let tree = Rc::new(RefCell::new(MonteCarloTree::new(5f32, model.clone())));
+    pub fn new_pair(model: M) -> (Self, Self) {
+        let tree = Arc::new(MonteCarloTree::new(5f32, model));
         (
             Self {
-                model: model.clone(),
                 tree: tree.clone(),
                 temperature: 1e-3,
                 state_prob_pairs: Vec::with_capacity(100),
-                iterations: 2000u32,
+                iterations: 1000u32,
             },
             Self {
-                model: model,
                 tree: tree,
                 temperature: 1e-3,
                 state_prob_pairs: Vec::with_capacity(100),
-                iterations: 2000u32,
+                iterations: 1000u32,
             },
         )
     }
@@ -159,23 +159,28 @@ where
     }
 }
 
+#[async_trait::async_trait]
 impl<M> Player for SelfPlayer<M>
 where
     M: RenjuModel,
 {
-    fn do_next_move(
+    async fn do_next_move(
         self: &mut Self,
         board: &mut RenjuBoard,
         choices: &Vec<(usize, usize)>,
     ) -> (usize, usize) {
         for _ in 0..self.iterations {
-            self.tree.borrow_mut().rollout(board.clone(), choices);
+            self.tree
+                .rollout(board.clone(), choices)
+                .await
+                .expect("rollout failed");
         }
 
         let move_prob_pairs: Vec<((usize, usize), f32)> = self
             .tree
-            .borrow_mut()
-            .get_move_probability(self.temperature);
+            .get_move_probability(self.temperature)
+            .await
+            .expect("get_move_probability() failed");
 
         // 15x15 tensor records the probability of each move
         let mut mcts_prob_matrix = SquareMatrix::default();
@@ -190,7 +195,7 @@ where
 
         let pos = self.pick_move(&move_prob_pairs, board);
 
-        self.tree.borrow_mut().update_with_position(pos);
+        self.tree.update_with_position(pos);
         pos
     }
 
@@ -200,6 +205,7 @@ where
     }
 }
 
+#[async_trait::async_trait]
 pub struct AiPlayer<M>
 where
     M: RenjuModel,
