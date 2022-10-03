@@ -95,7 +95,7 @@ where
         }
     }
 
-    pub async fn rollout(self: &mut Self, board: RenjuBoard, choices: &Vec<(usize, usize)>) {
+    pub async fn rollout(self: &Self, board: RenjuBoard, choices: &Vec<(usize, usize)>) {
         self.tree
             .rollout(board, choices)
             .await

@@ -1,19 +1,19 @@
 use crate::game::{RenjuBoard, SquareMatrix, StateTensor, TerminalState};
 use crate::model::RenjuModel;
-use atomicbox::AtomicBox;
+use crossbeam::atomic::AtomicCell;
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
-use std::sync::{Arc, RwLock, Weak as ArcWeak};
+
+use std::sync::{Arc, Weak as ArcWeak};
 use tokio::sync::oneshot::error::RecvError;
 use tokio::sync::oneshot::{self, Receiver, Sender};
+use tokio::sync::RwLock;
 
-#[derive(Debug)]
 pub struct ThreadSafeTreeNode {
     stones: u32, // number of stones on board without couting this node
     action: Option<(usize, usize)>,
-    parent: Option<ArcWeak<AtomicBox<Receiver<Self>>>>,
-    current: ArcWeak<AtomicBox<Receiver<Self>>>,
-    children: HashMap<(usize /*row*/, usize /*col*/), Arc<AtomicBox<Receiver<Self>>>>,
+    parent: Option<ArcWeak<AtomicCell<Receiver<Self>>>>,
+    current: ArcWeak<AtomicCell<Receiver<Self>>>,
+    children: HashMap<(usize /*row*/, usize /*col*/), Arc<AtomicCell<Receiver<Self>>>>,
     visit_times: u32, // number of visited times
     probability: f32, // prior probability from policy network
 
@@ -31,11 +31,43 @@ pub struct ThreadSafeTreeNode {
     unobserved_times: u32,
 }
 
+struct OpenedTreeNode(
+    Option<ThreadSafeTreeNode>,
+    Option<Sender<ThreadSafeTreeNode>>,
+);
+impl Drop for OpenedTreeNode {
+    fn drop(&mut self) {
+        assert!(self.0.is_some());
+        assert!(self.1.is_some());
+
+        if let Err(_) = self.1.take().unwrap().send(self.0.take().unwrap()) {
+            panic!("Unable to send");
+        }
+    }
+}
+impl OpenedTreeNode {
+    fn get_mut(&mut self) -> &mut ThreadSafeTreeNode {
+        if let Some(x) = &mut self.0 {
+            x
+        } else {
+            unreachable!()
+        }
+    }
+
+    fn get(&self) -> &ThreadSafeTreeNode {
+        if let Some(x) = &self.0 {
+            x
+        } else {
+            unreachable!()
+        }
+    }
+}
+
 impl ThreadSafeTreeNode {
-    fn new(prob: f32) -> Arc<AtomicBox<Receiver<Self>>> {
+    fn new(prob: f32) -> Arc<AtomicCell<Receiver<Self>>> {
         let (tx, rx) = oneshot::channel();
 
-        let node = Arc::new(AtomicBox::new(Box::new(rx)));
+        let node = Arc::new(AtomicCell::new(rx));
 
         let child = ThreadSafeTreeNode {
             stones: 0,
@@ -48,7 +80,9 @@ impl ThreadSafeTreeNode {
             probability: prob,
             q: 0f32,
         };
-        tx.send(child).unwrap();
+        if let Err(_) = tx.send(child) {
+            panic!("tx.send(child) failed");
+        }
         node
     }
 
@@ -57,13 +91,13 @@ impl ThreadSafeTreeNode {
         self: &mut Self,
         pos: (usize, usize),
         mut init: F,
-    ) -> Arc<AtomicBox<Receiver<Self>>>
+    ) -> Arc<AtomicCell<Receiver<Self>>>
     where
         F: FnMut(&mut ThreadSafeTreeNode),
     {
         let (tx, rx) = oneshot::channel();
 
-        let node = Arc::new(AtomicBox::new(Box::new(rx)));
+        let node = Arc::new(AtomicCell::new(rx));
 
         let mut child = ThreadSafeTreeNode {
             stones: self.stones + 1,
@@ -79,41 +113,51 @@ impl ThreadSafeTreeNode {
         init(&mut child);
 
         self.children.insert(pos, node.clone());
-        tx.send(child).unwrap();
+        if let Err(_) = tx.send(child) {
+            panic!("tx.send(child) failed");
+        }
         node
     }
 
+    async fn open_node(
+        reference: &Arc<AtomicCell<Receiver<Self>>>,
+    ) -> Result<OpenedTreeNode, RecvError> {
+        let (tx, rx) = oneshot::channel();
+        let prev_rx = reference.swap(rx);
+        let node = prev_rx.await?;
+
+        Ok(OpenedTreeNode(Some(node), Some(tx)))
+    }
+
     // recursively access from specific node to its all ancestors till root
-    async fn recursive_access<F>(self: &mut Self, mut cb: F) -> Result<(), RecvError>
+    async fn back_propagate<F>(
+        mut reference: Arc<AtomicCell<Receiver<Self>>>,
+        mut cb: F,
+    ) -> Result<(), RecvError>
     where
         F: FnMut(&mut Self) + Send,
     {
-        cb(self);
-        let mut parent_box = self.parent.as_ref().and_then(|x| x.upgrade());
-
-        while let Some(parent) = parent_box {
-            let (tx, rx) = oneshot::channel();
-            let prev_rx = parent.swap(Box::new(rx), Ordering::Relaxed);
-            let mut parent_node = prev_rx.await?;
-            cb(&mut parent_node);
-            parent_box = parent_node.parent.as_ref().and_then(|x| x.upgrade());
-            tx.send(parent_node).unwrap();
+        loop {
+            let mut current_node = Self::open_node(&reference).await?;
+            cb(current_node.get_mut());
+            if let Some(x) = current_node.get().parent.as_ref().and_then(|x| x.upgrade()) {
+                reference = x;
+            } else {
+                break;
+            }
         }
 
         Ok(())
     }
 
-    pub async fn back_propagate(self: &mut Self, leaf_value: f32) -> Result<(), RecvError> {
-        self.recursive_access(|node| {
-            node.unobserved_times -= 1;
-            node.visit_times += 1;
+    pub fn update(self: &mut Self, leaf_value: f32) {
+        self.unobserved_times -= 1;
+        self.visit_times += 1;
 
-            // q is the avarage score(evaluabl) in visit_times, initially q is zero
-            // q = sum(value) / n
-            // Progressive update : new_q = (value - old_q) / n + old_q
-            node.q += 1.0 * (leaf_value - node.q) / (node.visit_times as f32);
-        })
-        .await
+        // q is the avarage score(evaluabl) in visit_times, initially q is zero
+        // q = sum(value) / n
+        // Progressive update : new_q = (value - old_q) / n + old_q
+        self.q += 1.0 * (leaf_value - self.q) / (self.visit_times as f32);
     }
 
     // Calculate and return the value for this node.
@@ -132,51 +176,38 @@ impl ThreadSafeTreeNode {
     }
 
     /// Select a direct child with max UCB(Q+U)
-    async fn select(self: &Self, c_puct: f32) -> Result<Option<(Sender<Self>, Self)>, RecvError> {
-        let mut selected: Option<(Sender<Self>, _)> = None;
+    async fn select(self: &Self, c_puct: f32) -> Result<Option<OpenedTreeNode>, RecvError> {
+        let mut selected: Option<OpenedTreeNode> = None;
         let mut max_score = f32::MIN;
 
         // order is important here. be careful to avoid dead lock
-        for (_, child) in &self.children {
-            let (tx, rx) = oneshot::channel();
-            let prev_rx = child.swap(Box::new(rx), Ordering::Relaxed);
-            let child_node = prev_rx.await?;
+        for (pos, child) in &self.children {
+            let child_node = Self::open_node(child).await?;
 
-            let score = child_node.compute_score(c_puct, self.visit_times);
+            let score = child_node.get().compute_score(c_puct, self.visit_times);
             if score > max_score {
                 max_score = score;
-
-                if let Some((existing_tx, existing_node)) = selected.take() {
-                    existing_tx.send(existing_node).unwrap(); // release non-max one
-                }
-                selected = Some((tx, child_node));
-            } else {
-                tx.send(child_node).unwrap(); // release non-max one
+                selected = Some(child_node);
             }
         }
-
         Ok(selected)
     }
 
     async fn greedy_select_leaf(
-        self_ref: &Arc<AtomicBox<Receiver<Self>>>,
+        self_ref: &Arc<AtomicCell<Receiver<Self>>>,
         c_puct: f32,
-    ) -> Result<(Sender<Self>, Self, Vec<(usize, usize)>), RecvError> {
-        let (mut sender, rx) = oneshot::channel();
-        let prev_rx = self_ref.swap(Box::new(rx), Ordering::Relaxed);
-
+    ) -> Result<(OpenedTreeNode, Vec<(usize, usize)>), RecvError> {
         let mut moves = Vec::with_capacity(20);
 
-        let mut current_node = prev_rx.await?;
-        current_node.unobserved_times += 1;
+        let mut current_node = Self::open_node(self_ref).await?;
+
+        current_node.get_mut().unobserved_times += 1;
         loop {
-            match current_node.select(c_puct).await? {
-                Some((tx, child_node)) => {
-                    sender.send(current_node).unwrap();
-                    sender = tx;
+            match current_node.get().select(c_puct).await? {
+                Some(child_node) => {
                     current_node = child_node;
-                    current_node.unobserved_times += 1;
-                    moves.push(current_node.action.unwrap());
+                    current_node.get_mut().unobserved_times += 1;
+                    moves.push(current_node.get().action.unwrap());
                 }
                 None => {
                     break;
@@ -184,30 +215,24 @@ impl ThreadSafeTreeNode {
             };
         }
 
-        Ok((sender, current_node, moves))
+        Ok((current_node, moves))
     }
 
     async fn enumerate_children<F>(
-        self_ref: &Arc<AtomicBox<Receiver<Self>>>,
+        self_ref: &Arc<AtomicCell<Receiver<Self>>>,
         mut cb: F,
     ) -> Result<(), RecvError>
     where
         F: FnMut(&(usize, usize), &Self),
     {
-        let (sender, rx) = oneshot::channel();
-        let prev_rx = self_ref.swap(Box::new(rx), Ordering::Relaxed);
-
-        let current_node = prev_rx.await?;
+        let current_node = Self::open_node(self_ref).await?;
 
         // order is important here. be careful to avoid dead lock
-        for (pos, child) in &current_node.children {
-            let (tx, rx) = oneshot::channel();
-            let prev_rx = child.swap(Box::new(rx), Ordering::Relaxed);
-            let child_node = prev_rx.await?;
-            cb(pos, &child_node);
-            tx.send(child_node).unwrap();
+        for (pos, child) in &current_node.get().children {
+            let child_node = Self::open_node(child).await?;
+
+            cb(pos, child_node.get());
         }
-        sender.send(current_node).unwrap();
 
         Ok(())
     }
@@ -220,7 +245,7 @@ where
 {
     model: M,
     c_puct: f32,
-    root: RwLock<Arc<AtomicBox<Receiver<ThreadSafeTreeNode>>>>,
+    root: RwLock<Arc<AtomicCell<Receiver<ThreadSafeTreeNode>>>>,
 }
 
 impl<M> MonteCarloTree<M>
@@ -240,9 +265,9 @@ where
         mut board: RenjuBoard,
         choices: &Vec<(usize, usize)>,
     ) -> Result<(), RecvError> {
-        let root = self.root.read().unwrap().clone();
-        let (sender, mut node, moves) =
-            ThreadSafeTreeNode::greedy_select_leaf(&root, self.c_puct).await?;
+        let root = self.root.read().await.clone();
+
+        let (mut node, moves) = ThreadSafeTreeNode::greedy_select_leaf(&root, self.c_puct).await?;
 
         //assert_eq!(board.get_last_move(), root.action);
 
@@ -286,7 +311,7 @@ where
                 // extend children
                 for (row, col) in choices {
                     let probability = prob_matrix[row][col];
-                    node.create_child((row, col), |child| {
+                    node.get_mut().create_child((row, col), |child| {
                         child.probability = probability;
                     });
                 }
@@ -314,16 +339,22 @@ where
             }
         };
 
-        node.back_propagate(evaluation_score).await?;
+        node.get_mut().update(evaluation_score);
+        if let Some(parent) = node.get().parent.as_ref().and_then(|x| x.upgrade()) {
+            drop(node);
+            ThreadSafeTreeNode::back_propagate(parent, |node| {
+                node.update(evaluation_score);
+            })
+            .await?;
+        }
 
-        sender.send(node).unwrap();
         Ok(())
     }
 
     pub async fn get_visit_times(self: &Self) -> Result<SquareMatrix<u32>, RecvError> {
         let mut matrix = SquareMatrix::default();
         // get visit times of direct children of root
-        let root = self.root.read().unwrap().clone();
+        let root = self.root.read().await.clone();
         ThreadSafeTreeNode::enumerate_children(&root, |(row, col), child| {
             matrix[*row][*col] = child.visit_times;
         })
@@ -339,7 +370,7 @@ where
         let mut pairs = Vec::with_capacity(50);
         let mut max_log_visit_times = 0f32;
         // calc the move probabilities based on visit counts in top level
-        let root = self.root.read().unwrap().clone();
+        let root = self.root.read().await.clone();
         ThreadSafeTreeNode::enumerate_children(&root, |pos, child| {
             let log_visit_times =
                 1f32 / temperature * (1e-10 /*avoid zero*/ + child.visit_times as f32).ln();
@@ -365,27 +396,22 @@ where
     }
 
     pub async fn update_with_position(self: &Self, pos: (usize, usize)) -> Result<(), RecvError> {
-        let (_, rx) = oneshot::channel();
-        let root = self.root.read().unwrap().clone();
-        let prev_rx = root.swap(Box::new(rx), Ordering::Relaxed);
+        let root = self.root.read().await.clone();
 
-        let mut node = prev_rx.await?;
+        let mut node = ThreadSafeTreeNode::open_node(&root).await?;
 
         let child_ref = {
-            node.children
+            node.get_mut()
+                .children
                 .remove(&pos)
-                .or_else(|| Some(node.create_child(pos, |_| {})))
+                .or_else(|| Some(node.get_mut().create_child(pos, |_| {})))
                 .unwrap()
         };
 
-        let (tx, rx) = oneshot::channel();
-        let prev_rx = child_ref.swap(Box::new(rx), Ordering::Relaxed);
+        let mut child = ThreadSafeTreeNode::open_node(&child_ref).await?;
+        child.get_mut().parent = None;
 
-        let mut child = prev_rx.await?;
-        child.parent = None;
-        tx.send(child).unwrap();
-
-        *self.root.write().unwrap() = child_ref;
+        *self.root.write().await = child_ref;
 
         Ok(())
     }
