@@ -49,8 +49,6 @@ pub trait RenjuModel {
     fn export(self: &Self) -> PyResult<Bytes>;
 
     fn import(self: &Self, buffer: Bytes) -> PyResult<()>;
-
-    fn random_choose_with_dirichlet_noice(self: &Self, probs: &[f32]) -> PyResult<usize>;
 }
 
 //
@@ -187,22 +185,6 @@ impl RenjuModel for PolicyValueModel {
             Ok(())
         })
     }
-
-    fn random_choose_with_dirichlet_noice(self: &Self, probs: &[f32]) -> PyResult<usize> {
-        Python::with_gil(|py| {
-            let func: Py<PyAny> = self
-                .module
-                .as_ref(py)
-                .getattr("random_choose_with_dirichlet_noice")?
-                .into();
-
-            let state_batch: &PyList = PyList::new(py, probs);
-
-            let args = PyTuple::new(py, &[state_batch]);
-            func.call1(py, args)?;
-            Ok(0)
-        })
-    }
 }
 
 static START: Once = Once::new();
@@ -312,10 +294,6 @@ impl RenjuModel for OnDeviceModel {
     }
 
     fn import(self: &Self, _: Bytes) -> PyResult<()> {
-        unimplemented!()
-    }
-
-    fn random_choose_with_dirichlet_noice(self: &Self, _: &[f32]) -> PyResult<usize> {
         unimplemented!()
     }
 }

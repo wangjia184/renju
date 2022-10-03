@@ -1,17 +1,39 @@
+/*
+ * (C) Copyright 2022 Jerry.Wang (https://github.com/wangjia184).
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// A lockless parallel Monte-Carlo Tree Search
+// The unobserved_times parameter is inspired by the added O parameter in paper https://arxiv.org/abs/1810.11755
+// <<Watch the Unobserved: A Simple Approach to Parallelizing Monte Carlo Tree Search>>
+
 use crate::game::{RenjuBoard, SquareMatrix, StateTensor, TerminalState};
 use crate::model::RenjuModel;
-use core::cell::RefCell;
-use std::{
-    collections::HashMap,
-    rc::{Rc, Weak},
-};
+use crossbeam::atomic::AtomicCell;
+use std::collections::HashMap;
 
-pub struct TreeNode {
+use std::sync::{Arc, Weak as ArcWeak};
+use tokio::sync::oneshot::error::RecvError;
+use tokio::sync::oneshot::{self, Receiver, Sender};
+use tokio::sync::RwLock;
+
+pub struct ThreadSafeTreeNode {
+    stones: u32, // number of stones on board without couting this node
     action: Option<(usize, usize)>,
-    parent: Option<Weak<RefCell<TreeNode>>>, // None if this is a root node
-    children: HashMap<(usize /*row*/, usize /*col*/), Rc<RefCell<TreeNode>>>,
-    current: Option<Weak<RefCell<TreeNode>>>,
-    stones: u32,      // number of stones on board without couting this node
+    parent: Option<ArcWeak<AtomicCell<Receiver<Self>>>>,
+    current: ArcWeak<AtomicCell<Receiver<Self>>>,
+    children: HashMap<(usize /*row*/, usize /*col*/), Arc<AtomicCell<Receiver<Self>>>>,
     visit_times: u32, // number of visited times
     probability: f32, // prior probability from policy network
 
@@ -23,210 +45,256 @@ pub struct TreeNode {
     // The first half of the equation will do exactly that:
     // the action that currently has the highest estimated reward will be the chosen action.
     q: f32, // the exploitation part of the equation. average of evaluations of all leaves
+
+    // the number of rollouts that have been initiated but not yet completed, which we name as unobserved samples.
+    unobserved_times: u32,
 }
 
-impl TreeNode {
-    pub fn new(probability: f32) -> Rc<RefCell<TreeNode>> {
-        let node = TreeNode {
+struct OpenedTreeNode(
+    Option<ThreadSafeTreeNode>,
+    Option<Sender<ThreadSafeTreeNode>>,
+);
+impl Drop for OpenedTreeNode {
+    fn drop(&mut self) {
+        assert!(self.0.is_some());
+        assert!(self.1.is_some());
+
+        if let Err(_) = self.1.take().unwrap().send(self.0.take().unwrap()) {
+            panic!("Unable to send");
+        }
+    }
+}
+impl OpenedTreeNode {
+    fn get_mut(&mut self) -> &mut ThreadSafeTreeNode {
+        if let Some(x) = &mut self.0 {
+            x
+        } else {
+            unreachable!()
+        }
+    }
+
+    fn get(&self) -> &ThreadSafeTreeNode {
+        if let Some(x) = &self.0 {
+            x
+        } else {
+            unreachable!()
+        }
+    }
+}
+
+impl ThreadSafeTreeNode {
+    fn new(prob: f32) -> Arc<AtomicCell<Receiver<Self>>> {
+        let (tx, rx) = oneshot::channel();
+
+        let node = Arc::new(AtomicCell::new(rx));
+
+        let child = ThreadSafeTreeNode {
+            stones: 0,
             action: None,
             parent: None,
+            current: Arc::downgrade(&node),
             children: HashMap::new(),
-            current: None,
-            stones: 0,
+            unobserved_times: 0,
             visit_times: 0,
-            probability: probability,
+            probability: prob,
             q: 0f32,
-            //u: 0f32,
         };
-        let instance = Rc::new(RefCell::new(node));
-        instance.borrow_mut().current = Some(Rc::downgrade(&instance));
-        instance
-    }
-
-    pub fn new_child(pos: (usize, usize), probability: f32) -> Rc<RefCell<TreeNode>> {
-        let node = TreeNode {
-            action: Some(pos),
-            parent: None,
-            children: HashMap::new(),
-            current: None,
-            stones: 0,
-            visit_times: 0,
-            probability: probability,
-            q: 0f32,
-            //u: 0f32,
-        };
-        let instance = Rc::new(RefCell::new(node));
-        instance.borrow_mut().current = Some(Rc::downgrade(&instance));
-        instance
-    }
-
-    // Create a new child
-    pub fn create_child(
-        self: &mut TreeNode,
-        pos: (usize, usize),
-        probability: f32,
-    ) -> Rc<RefCell<TreeNode>> {
-        let instance = TreeNode::new_child(pos, probability);
-        self.append_child(pos, instance.clone());
-        instance
-    }
-
-    // Append a child
-    fn append_child(self: &mut TreeNode, pos: (usize, usize), child: Rc<RefCell<TreeNode>>) {
-        assert!(self.current.is_some());
-        // link child node to this one
-        {
-            let mut node = child.borrow_mut();
-            node.parent = Some(self.current.as_ref().unwrap().clone());
-            node.stones = self.stones + 1;
+        if let Err(_) = tx.send(child) {
+            panic!("tx.send(child) failed");
         }
-        child.borrow_mut().parent = Some(self.current.as_ref().unwrap().clone());
-        self.children.insert(pos, child);
+        node
     }
 
-    #[allow(dead_code)]
-    // Determine if this is a leaf node
-    pub fn is_leaf(self: &TreeNode) -> bool {
-        self.children.len() == 0
+    // create a child
+    fn create_child<F>(
+        self: &mut Self,
+        pos: (usize, usize),
+        mut init: F,
+    ) -> Arc<AtomicCell<Receiver<Self>>>
+    where
+        F: FnMut(&mut ThreadSafeTreeNode),
+    {
+        let (tx, rx) = oneshot::channel();
+
+        let node = Arc::new(AtomicCell::new(rx));
+
+        let mut child = ThreadSafeTreeNode {
+            stones: self.stones + 1,
+            action: Some(pos),
+            parent: Some(self.current.clone()), // link to this one
+            current: Arc::downgrade(&node),
+            children: HashMap::new(),
+            unobserved_times: 0,
+            visit_times: 0,
+            probability: 0f32,
+            q: 0f32,
+        };
+        init(&mut child);
+
+        self.children.insert(pos, node.clone());
+        if let Err(_) = tx.send(child) {
+            panic!("tx.send(child) failed");
+        }
+        node
     }
 
-    #[allow(dead_code)]
-    // Determine if this is root node
-    pub fn is_root(self: &TreeNode) -> bool {
-        self.parent.is_none()
+    async fn open_node(
+        reference: &Arc<AtomicCell<Receiver<Self>>>,
+    ) -> Result<OpenedTreeNode, RecvError> {
+        let (tx, rx) = oneshot::channel();
+        let prev_rx = reference.swap(rx);
+        let node = prev_rx.await?;
+
+        Ok(OpenedTreeNode(Some(node), Some(tx)))
     }
 
-    // Update node values from leaf evaluation.
-    // leaf_value: the value of subtree evaluation from the current player's perspective.
-    pub fn update(self: &mut TreeNode, leaf_value: f32) {
+    // recursively access from specific node to its all ancestors till root
+    async fn back_propagate<F>(
+        mut reference: Arc<AtomicCell<Receiver<Self>>>,
+        mut cb: F,
+    ) -> Result<(), RecvError>
+    where
+        F: FnMut(&mut Self) + Send,
+    {
+        loop {
+            let mut current_node = Self::open_node(&reference).await?;
+            cb(current_node.get_mut());
+            if let Some(x) = current_node.get().parent.as_ref().and_then(|x| x.upgrade()) {
+                reference = x;
+            } else {
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn update(self: &mut Self, leaf_value: f32) {
+        self.unobserved_times -= 1;
         self.visit_times += 1;
+
         // q is the avarage score(evaluabl) in visit_times, initially q is zero
         // q = sum(value) / n
         // Progressive update : new_q = (value - old_q) / n + old_q
         self.q += 1.0 * (leaf_value - self.q) / (self.visit_times as f32);
     }
 
-    // Like a call to update(), but applied recursively for all ancestors.
-    pub fn update_recursive(self: &mut TreeNode, leaf_value: f32) {
-        // If it is not root, this node's parent should be updated first.
-        if let Some(parent) = &self.parent {
-            let parent = parent
-                .upgrade()
-                .expect("Unable to upgrade weak reference of parent node");
-            // Odd and even levels in the tree are from different players (black/white)
-            // the leaf node is current turn player. The parent node is opposite player's move
-            // hence the value must multiple -1 when traverse from bottom to top
-            parent.borrow_mut().update_recursive(-leaf_value);
-        }
-        self.update(leaf_value);
-    }
-
     // Calculate and return the value for this node.
     // It is a combination of leaf evaluations Q, and this node's prior adjusted for its visit count, u.
     // c_puct: a number in (0, inf) controlling the relative impact of value Q, and prior probability P, on this node's score.
-    pub fn compute_score(self: &Self, c_puct: f32) -> f32 {
+    fn compute_score(self: &Self, c_puct: f32, parent_visit_times: u32) -> f32 {
         // The second half of the equation adds exploration,
         // with the degree of exploration being controlled by the hyper-parameter ‘c’.
         // Effectively this part of the equation provides a measure of the uncertainty for the action’s reward estimate.
         // u = visit-count-adjusted prior score
-        let u = match &self.parent {
-            Some(parent) => {
-                let parent = parent
-                    .upgrade()
-                    .expect("Unable to upgrade weak reference of parent node");
-
-                if self.visit_times == 0 && parent.borrow().is_root() {
-                    f32::MAX
-                } else {
-                    let parent_visit_times = parent.as_ref().borrow().visit_times;
-
-                    c_puct * self.probability * f32::sqrt(parent_visit_times as f32)
-                        / (1f32 + self.visit_times as f32)
-                }
-            }
-            None => 0f32,
-        };
+        let u = c_puct
+            * self.probability
+            * f32::sqrt(parent_visit_times as f32 + self.unobserved_times as f32)
+            / (1f32 + self.visit_times as f32 + self.unobserved_times as f32);
         return self.q + u;
     }
 
-    /// Select a child with max UCB(Q+U)
-    pub fn select(self: &Self, c_puct: f32) -> Option<((usize, usize), Rc<RefCell<TreeNode>>)> {
+    /// Select a direct child with max UCB(Q+U)
+    async fn select(self: &Self, c_puct: f32) -> Result<Option<OpenedTreeNode>, RecvError> {
+        let mut selected: Option<OpenedTreeNode> = None;
         let mut max_score = f32::MIN;
-        let mut selected_pair: Option<((usize, usize), Rc<RefCell<TreeNode>>)> = None;
 
+        // order is important here. be careful to avoid dead lock
         for (pos, child) in &self.children {
-            let score = child.borrow().compute_score(c_puct);
+            let child_node = Self::open_node(child).await?;
+
+            let score = child_node.get().compute_score(c_puct, self.visit_times);
             if score > max_score {
                 max_score = score;
-                selected_pair = Some((*pos, child.clone()));
+                selected = Some(child_node);
             }
         }
-
-        selected_pair
+        Ok(selected)
     }
 
-    #[allow(dead_code)]
-    pub fn get_q(self: &Self) -> f32 {
-        self.q
+    async fn greedy_select_leaf(
+        self_ref: &Arc<AtomicCell<Receiver<Self>>>,
+        c_puct: f32,
+    ) -> Result<(OpenedTreeNode, Vec<(usize, usize)>), RecvError> {
+        let mut moves = Vec::with_capacity(20);
+
+        let mut current_node = Self::open_node(self_ref).await?;
+
+        current_node.get_mut().unobserved_times += 1;
+        loop {
+            match current_node.get().select(c_puct).await? {
+                Some(child_node) => {
+                    current_node = child_node;
+                    current_node.get_mut().unobserved_times += 1;
+                    moves.push(current_node.get().action.unwrap());
+                }
+                None => {
+                    break;
+                }
+            };
+        }
+
+        Ok((current_node, moves))
     }
-    #[allow(dead_code)]
-    pub fn get_action(self: &Self) -> Option<(usize, usize)> {
-        self.action
-    }
-    #[allow(dead_code)]
-    pub fn get_child(self: &Self, pos: (usize, usize)) -> Option<Rc<RefCell<TreeNode>>> {
-        self.children.get(&pos).and_then(|x| Some(x.clone()))
+
+    async fn enumerate_children<F>(
+        self_ref: &Arc<AtomicCell<Receiver<Self>>>,
+        mut cb: F,
+    ) -> Result<(), RecvError>
+    where
+        F: FnMut(&(usize, usize), &Self),
+    {
+        let current_node = Self::open_node(self_ref).await?;
+
+        // order is important here. be careful to avoid dead lock
+        for (pos, child) in &current_node.get().children {
+            let child_node = Self::open_node(child).await?;
+
+            cb(pos, child_node.get());
+        }
+
+        Ok(())
     }
 }
 
 // Monte Carlo tree search
 pub struct MonteCarloTree<M>
 where
-    M: RenjuModel,
+    M: RenjuModel + Send,
 {
-    model: Rc<RefCell<M>>,
+    model: M,
     c_puct: f32,
-    root: Rc<RefCell<TreeNode>>,
+    root: RwLock<Arc<AtomicCell<Receiver<ThreadSafeTreeNode>>>>,
 }
 
 impl<M> MonteCarloTree<M>
 where
-    M: RenjuModel,
+    M: RenjuModel + Send,
 {
-    pub fn new(c_puct: f32, model: Rc<RefCell<M>>) -> Self {
+    pub fn new(c_puct: f32, model: M) -> Self {
         Self {
             c_puct: c_puct,
-            root: TreeNode::new(1f32),
+            root: RwLock::new(ThreadSafeTreeNode::new(1f32)),
             model: model,
         }
     }
-    #[allow(dead_code)]
-    pub fn get_root(self: &Self) -> Rc<RefCell<TreeNode>> {
-        self.root.clone()
-    }
 
-    pub fn rollout(self: &mut Self, mut board: RenjuBoard, choices: &Vec<(usize, usize)>) {
-        let mut node = self.root.clone();
-        assert_eq!(board.get_last_move(), node.borrow().action);
+    pub async fn rollout(
+        self: &Self,
+        mut board: RenjuBoard,
+        choices: &Vec<(usize, usize)>,
+    ) -> Result<(), RecvError> {
+        let root = self.root.read().await.clone();
+
+        let (mut node, moves) = ThreadSafeTreeNode::greedy_select_leaf(&root, self.c_puct).await?;
+
+        //assert_eq!(board.get_last_move(), root.action);
 
         let mut state: Option<TerminalState> = None;
-        if !node.borrow().children.is_empty() {
-            loop {
-                // Greedily select next move.
-                let child = match node.borrow().select(self.c_puct) {
-                    None => {
-                        break;
-                    } // leaf
-                    Some((pos, c)) => {
-                        state = Some(board.do_move(pos));
-                        c
-                    }
-                };
-                node = child;
-                if state.as_ref().unwrap().is_over() {
-                    break;
-                }
-            }
+        if !moves.is_empty() {
+            moves.into_iter().for_each(|pos| {
+                state = Some(board.do_move(pos));
+            });
         } else {
             if choices.len() > 1 {
                 //println!("Never explored before");
@@ -250,7 +318,6 @@ where
 
                 let (prob_matrix, score) = self
                     .model
-                    .borrow()
                     .predict(&state_tensor, false)
                     .expect("Failed to predict");
 
@@ -263,7 +330,9 @@ where
                 // extend children
                 for (row, col) in choices {
                     let probability = prob_matrix[row][col];
-                    node.borrow_mut().create_child((row, col), probability);
+                    node.get_mut().create_child((row, col), |child| {
+                        child.probability = probability;
+                    });
                 }
             }
             TerminalState::Draw => {
@@ -289,119 +358,80 @@ where
             }
         };
 
-        node.borrow_mut().update_recursive(evaluation_score);
+        node.get_mut().update(evaluation_score);
+        if let Some(parent) = node.get().parent.as_ref().and_then(|x| x.upgrade()) {
+            drop(node);
+            ThreadSafeTreeNode::back_propagate(parent, |node| {
+                node.update(evaluation_score);
+            })
+            .await?;
+        }
+
+        Ok(())
     }
 
-    pub fn get_visit_times(self: &Self) -> SquareMatrix<u32> {
+    pub async fn get_visit_times(self: &Self) -> Result<SquareMatrix<u32>, RecvError> {
         let mut matrix = SquareMatrix::default();
-        // calc the move probabilities based on visit counts at the root node
-        self.root
-            .borrow()
-            .children
-            .iter()
-            .for_each(|((row, col), child)| matrix[*row][*col] = child.borrow().visit_times);
-
-        matrix
+        // get visit times of direct children of root
+        let root = self.root.read().await.clone();
+        ThreadSafeTreeNode::enumerate_children(&root, |(row, col), child| {
+            matrix[*row][*col] = child.visit_times;
+        })
+        .await?;
+        Ok(matrix)
     }
 
     // temperature parameter in (0, 1] controls the level of exploration
-    pub fn get_move_probability(
-        self: &mut Self,
+    pub async fn get_move_probability(
+        self: &Self,
         temperature: f32,
-    ) -> Vec<((usize, usize) /*pos*/, f32 /* probability */)> {
+    ) -> Result<Vec<((usize, usize) /*pos*/, f32 /* probability */)>, RecvError> {
+        let mut pairs = Vec::with_capacity(50);
         let mut max_log_visit_times = 0f32;
-        // calc the move probabilities based on visit counts at the root node
-        let pairs: Vec<_> = self
-            .root
-            .borrow()
-            .children
-            .iter()
-            .map(|(pos, child)| {
-                let log_visit_times = 1f32 / temperature
-                    * (1e-10 /*avoid zero*/ + child.borrow().visit_times as f32).ln();
-                if log_visit_times > max_log_visit_times {
-                    max_log_visit_times = log_visit_times;
-                }
-                (*pos, log_visit_times)
-            })
-            .collect();
+        // calc the move probabilities based on visit counts in top level
+        let root = self.root.read().await.clone();
+        ThreadSafeTreeNode::enumerate_children(&root, |pos, child| {
+            let log_visit_times =
+                1f32 / temperature * (1e-10 /*avoid zero*/ + child.visit_times as f32).ln();
+            if log_visit_times > max_log_visit_times {
+                max_log_visit_times = log_visit_times;
+            }
+            pairs.push((*pos, log_visit_times));
+        })
+        .await?;
 
         // softmax
         let mut sum = 0f32;
-        let mut pairs: Vec<_> = pairs
-            .into_iter()
-            .map(|(pos, log_visit_times)| {
-                let prob = (log_visit_times - max_log_visit_times).exp();
-                sum += prob;
-                (pos, prob)
-            })
-            .collect();
+        for (_, log_visit_times) in &mut pairs {
+            *log_visit_times = (*log_visit_times - max_log_visit_times).exp();
+            sum += *log_visit_times;
+        }
 
-        pairs.iter_mut().for_each(|(_, prob)| {
+        for (_, prob) in &mut pairs {
             *prob /= sum;
-        });
+        }
 
-        pairs
+        Ok(pairs)
     }
 
-    pub fn update_with_position(self: &mut Self, pos: (usize, usize)) {
-        let child = {
-            let mut r = self.root.borrow_mut();
+    pub async fn update_with_position(self: &Self, pos: (usize, usize)) -> Result<(), RecvError> {
+        let root = self.root.read().await.clone();
 
-            r.children
+        let mut node = ThreadSafeTreeNode::open_node(&root).await?;
+
+        let child_ref = {
+            node.get_mut()
+                .children
                 .remove(&pos)
-                .or_else(|| Some(r.create_child(pos, 0f32)))
+                .or_else(|| Some(node.get_mut().create_child(pos, |_| {})))
                 .unwrap()
         };
 
-        self.root.borrow_mut().children.clear(); // free all other children
-        if let Ok(cell) = Rc::try_unwrap(child) {
-            let mut node = cell.into_inner();
-            node.parent = None;
-            self.root.replace(node);
-            self.root.borrow_mut().current = Some(Rc::downgrade(&self.root));
-            self.root
-                .borrow_mut()
-                .children
-                .iter_mut()
-                .for_each(|(_, child)| {
-                    child.borrow_mut().parent = Some(Rc::downgrade(&self.root));
-                });
-        } else {
-            unreachable!("There must be only one strong reference to child node");
-        }
-    }
-}
+        let mut child = ThreadSafeTreeNode::open_node(&child_ref).await?;
+        child.get_mut().parent = None;
 
-// for integration test only
-#[cfg(test)]
-#[allow(dead_code)]
-impl TreeNode {
-    pub fn get_visit_times(self: &Self) -> u32 {
-        self.visit_times
-    }
-    pub fn get_probability(self: &Self) -> f32 {
-        self.probability
-    }
-    pub fn get_parent(self: &Self) -> Option<Rc<RefCell<TreeNode>>> {
-        if let Some(ref parent) = self.parent {
-            return parent.upgrade();
-        }
-        None
-    }
+        *self.root.write().await = child_ref;
 
-    pub fn get_children(
-        self: &Self,
-    ) -> HashMap<(usize /*row*/, usize /*col*/), Rc<RefCell<TreeNode>>> {
-        self.children.clone()
-    }
-
-    pub fn get_current(self: &Self) -> Rc<RefCell<TreeNode>> {
-        if let Some(ref current) = self.current {
-            if let Some(current) = current.upgrade() {
-                return current;
-            }
-        }
-        unreachable!("Current node must exists");
+        Ok(())
     }
 }

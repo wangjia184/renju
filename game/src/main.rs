@@ -26,7 +26,8 @@ mod train;
 use train::{DataProducer, TrainDataItem, Trainer};
 mod human;
 mod model;
-use human::{BoardInfo, MatchState};
+
+use human::MatchState;
 
 static ABOUT_TEXT: &str = "Renju game ";
 
@@ -77,7 +78,7 @@ enum Verb {
     },
 }
 
-#[tokio::main(flavor = "multi_thread")]
+#[tokio::main(flavor = "multi_thread", worker_threads = 20)]
 async fn main() {
     let args = Arguments::parse();
 
@@ -305,33 +306,22 @@ impl TcpServer {
 
 #[tauri::command]
 async fn new_match(window: tauri::Window, black: bool) {
-    human::start_new_match(black);
+    let board_info = human::start_new_match(black).await;
 
-    let board_info: Box<BoardInfo> = human::execute(Box::new(move |m| {
-        if !black {
-            m.machine_move();
-        }
-        Box::new(m.get_board())
-    }))
-    .await;
     window.emit("board_updated", board_info).unwrap();
 }
 
 #[tauri::command]
 async fn do_move(window: tauri::Window, pos: (usize, usize)) -> MatchState {
-    let board_info: Box<BoardInfo> = human::execute(Box::new(move |m| {
-        m.human_move(pos);
-        Box::new(m.get_board())
-    }))
-    .await;
+    let board_info = human::human_move(pos).await;
 
-    let mut state = board_info.get_state();
+    let state = board_info.get_state();
 
     let seconds = match board_info.get_stones() {
         0..=3 => 3,
         4..=6 => 7,
-        7..=14 => 15,
-        _ => 20,
+        7..=14 => 10,
+        _ => 12,
     };
 
     window.emit("board_updated", board_info).unwrap();
@@ -340,13 +330,8 @@ async fn do_move(window: tauri::Window, pos: (usize, usize)) -> MatchState {
     {
         sleep(Duration::from_secs(seconds)).await;
 
-        let board_info: Box<BoardInfo> = human::execute(Box::new(|m| {
-            m.machine_move();
-            Box::new(m.get_board())
-        }))
-        .await;
+        let board_info = human::machine_move().await;
 
-        state = board_info.get_state();
         window.emit("board_updated", board_info).unwrap();
     }
 

@@ -22,13 +22,13 @@ serde = { version = "1.0.144", features = ["derive"] }
 tauri = { version = "1.1.1", features = ["api-all"] }
 pyo3 = { version = "0.17.1", features = [] }
 num_cpus = "1.13.1"
-
+crossbeam = "0.8.2"
 tensorflow = "0.19.1"
 tensorflow-sys = { version = "0.22.1", features = ["runtime_linking"] }
 
-
 rand = "0.8.5"
-
+rand_distr = "0.4.3"
+probability = "0.18.0"
 
 [dependencies.uuid]
 version = "1.1.2"
