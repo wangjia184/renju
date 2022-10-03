@@ -149,16 +149,14 @@ impl ThreadSafeTreeNode {
     }
 
     // recursively access from specific node to its all ancestors till root
-    async fn back_propagate<F>(
+    async fn back_propagate(
         mut reference: Arc<AtomicCell<Receiver<Self>>>,
-        mut cb: F,
-    ) -> Result<(), RecvError>
-    where
-        F: FnMut(&mut Self) + Send,
-    {
+        mut leaf_value: f32,
+    ) -> Result<(), RecvError> {
         loop {
+            leaf_value *= -1f32;
             let mut current_node = Self::open_node(&reference).await?;
-            cb(current_node.get_mut());
+            current_node.get_mut().update(leaf_value);
             if let Some(x) = current_node.get().parent.as_ref().and_then(|x| x.upgrade()) {
                 reference = x;
             } else {
@@ -361,10 +359,7 @@ where
         node.get_mut().update(evaluation_score);
         if let Some(parent) = node.get().parent.as_ref().and_then(|x| x.upgrade()) {
             drop(node);
-            ThreadSafeTreeNode::back_propagate(parent, |node| {
-                node.update(evaluation_score);
-            })
-            .await?;
+            ThreadSafeTreeNode::back_propagate(parent, evaluation_score).await?;
         }
 
         Ok(())
