@@ -1,3 +1,23 @@
+/*
+ * (C) Copyright 2022 Jerry.Wang (https://github.com/wangjia184).
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// A lockless parallel Monte-Carlo Tree Search
+// The unobserved_times parameter is inspired by the added O parameter in paper https://arxiv.org/abs/1810.11755
+// <<Watch the Unobserved: A Simple Approach to Parallelizing Monte Carlo Tree Search>>
+
 use crate::game::{RenjuBoard, SquareMatrix, StateTensor, TerminalState};
 use crate::model::RenjuModel;
 use crossbeam::atomic::AtomicCell;
@@ -26,7 +46,6 @@ pub struct ThreadSafeTreeNode {
     // the action that currently has the highest estimated reward will be the chosen action.
     q: f32, // the exploitation part of the equation. average of evaluations of all leaves
 
-    // WATCH THE UNOBSERVED: A SIMPLE APPROACH TO PARALLELIZING MONTE CARLO TREE SEARCH
     // the number of rollouts that have been initiated but not yet completed, which we name as unobserved samples.
     unobserved_times: u32,
 }
