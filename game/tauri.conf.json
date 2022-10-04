@@ -55,10 +55,10 @@
     "windows": [
       {
         "fullscreen": false,
-        "height": 1000,
+        "height": 800,
         "resizable": false,
         "title": "Renju Game",
-        "width": 1150
+        "width": 1000
       }
     ]
   }

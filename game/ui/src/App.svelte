@@ -40,7 +40,7 @@
       setTimeout(() => (isWonOpen = false), 6000);
     } else if (evt.detail == "MachineWon") {
       isLoseOpen = true;
-      setTimeout(() => (isLoseOpen = false), 9000);
+      setTimeout(() => (isLoseOpen = false), 6000);
     } else {
       // TODO : draw
     }

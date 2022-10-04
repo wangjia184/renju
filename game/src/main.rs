@@ -78,7 +78,7 @@ enum Verb {
     },
 }
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 20)]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() {
     let args = Arguments::parse();
 

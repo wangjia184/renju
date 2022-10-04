@@ -90,7 +90,7 @@ impl HumanVsMachineMatch {
         let model = OnDeviceModel::load("renju_15x15_model").expect("Unable to load saved model");
 
         let ai_player = AiPlayer::new(model, 0 /*we will rollout manually */);
-        let max_threads = num_cpus::get();
+        let max_threads = (num_cpus::get() - 2).max(1);
         let instance = Arc::new(RwLock::new(Self {
             ai_player: Arc::new(ai_player),
             board: RenjuBoard::default(),

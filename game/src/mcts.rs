@@ -82,6 +82,37 @@ impl OpenedTreeNode {
     }
 }
 
+struct TreeNodeChildren {
+    pairs: Vec<(
+        (usize /*row*/, usize /*col*/),
+        Arc<AtomicCell<Receiver<ThreadSafeTreeNode>>>,
+    )>,
+    parent_visit_times: u32,
+}
+
+impl TreeNodeChildren {
+    /// Select a direct child with max UCB(Q+U)
+    async fn select(self: &Self, c_puct: f32) -> Result<OpenedTreeNode, RecvError> {
+        let mut selected: Option<OpenedTreeNode> = None;
+        let mut max_score = f32::MIN;
+
+        // order is important here. be careful to avoid dead lock
+        for (_, child) in &self.pairs {
+            let child_node = ThreadSafeTreeNode::open_node(child).await?;
+
+            let score = child_node
+                .get()
+                .compute_score(c_puct, self.parent_visit_times);
+            if score > max_score {
+                max_score = score;
+                selected = Some(child_node);
+            }
+        }
+        assert!(selected.is_some());
+        Ok(selected.unwrap())
+    }
+}
+
 impl ThreadSafeTreeNode {
     fn new(prob: f32) -> Arc<AtomicCell<Receiver<Self>>> {
         let (tx, rx) = oneshot::channel();
@@ -192,22 +223,17 @@ impl ThreadSafeTreeNode {
         return self.q + u;
     }
 
-    /// Select a direct child with max UCB(Q+U)
-    async fn select(self: &Self, c_puct: f32) -> Result<Option<OpenedTreeNode>, RecvError> {
-        let mut selected: Option<OpenedTreeNode> = None;
-        let mut max_score = f32::MIN;
-
-        // order is important here. be careful to avoid dead lock
-        for (pos, child) in &self.children {
-            let child_node = Self::open_node(child).await?;
-
-            let score = child_node.get().compute_score(c_puct, self.visit_times);
-            if score > max_score {
-                max_score = score;
-                selected = Some(child_node);
-            }
-        }
-        Ok(selected)
+    fn get_children(self: &Self) -> TreeNodeChildren {
+        let mut children = TreeNodeChildren {
+            parent_visit_times: self.visit_times,
+            pairs: self
+                .children
+                .iter()
+                .map(|(pos, cell)| (*pos, cell.clone()))
+                .collect(),
+        };
+        children.pairs.sort_by_key(|pair| pair.0);
+        children
     }
 
     async fn greedy_select_leaf(
@@ -220,16 +246,15 @@ impl ThreadSafeTreeNode {
 
         current_node.get_mut().unobserved_times += 1;
         loop {
-            match current_node.get().select(c_puct).await? {
-                Some(child_node) => {
-                    current_node = child_node;
-                    current_node.get_mut().unobserved_times += 1;
-                    moves.push(current_node.get().action.unwrap());
-                }
-                None => {
-                    break;
-                }
-            };
+            if current_node.get().children.is_empty() {
+                break;
+            } else {
+                let children = current_node.get().get_children();
+                drop(current_node); //release parent node before select children
+                current_node = children.select(c_puct).await?;
+                current_node.get_mut().unobserved_times += 1;
+                moves.push(current_node.get().action.unwrap());
+            }
         }
 
         Ok((current_node, moves))
