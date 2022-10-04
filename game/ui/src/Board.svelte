@@ -33,6 +33,14 @@
                 visitMatrix = evt.payload.visited;
                 state = evt.payload.state;
                 lastMove = evt.payload.last;
+
+                if (
+                    state == "MachineWon" ||
+                    state == "HumanWon" ||
+                    state == "Draw"
+                ) {
+                    dispatch("over", state);
+                }
             }
         });
         return unlisten;
@@ -115,13 +123,6 @@
         if (!blocking && state == "HumanThinking") {
             blocking = true;
             invoke("do_move", { pos: [row, col] }).then((state) => {
-                if (
-                    state == "MachineWon" ||
-                    state == "HumanWon" ||
-                    state == "Draw"
-                ) {
-                    dispatch("over", state);
-                }
                 blocking = false;
             });
         }
