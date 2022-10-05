@@ -13,7 +13,6 @@ use tokio::sync::watch::Sender;
 
 use crate::game::*;
 use crate::model::*;
-use crate::player::*;
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct TrainDataItem(

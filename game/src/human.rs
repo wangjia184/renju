@@ -1,12 +1,13 @@
 use crate::game::{RenjuBoard, SquareMatrix, TerminalState};
 
+use crate::mcts::{MonteCarloTree, PredictionPromise};
 use crate::model::{OnDeviceModel, RenjuModel};
-use crate::player::AiPlayer;
 
+use crossbeam::atomic::AtomicCell;
 use std::sync::atomic::Ordering;
 use tokio::sync::RwLock;
 
-use std::sync::{atomic::AtomicBool, Arc, Mutex};
+use std::sync::{atomic::AtomicBool, Arc, Mutex, Once};
 use tokio::task::JoinHandle;
 
 static SINGLETON: Mutex<Option<Arc<RwLock<HumanVsMachineMatch>>>> = Mutex::new(None);
@@ -55,7 +56,7 @@ pub enum MatchState {
     MachineWon,
 }
 pub struct HumanVsMachineMatch {
-    ai_player: Arc<AiPlayer<OnDeviceModel>>,
+    ai_player: Arc<AiPlayer>,
     board: RenjuBoard,
     human_play_black: bool,
     state: MatchState,
@@ -87,9 +88,7 @@ impl BoardInfo {
 
 impl HumanVsMachineMatch {
     pub async fn new(human_play_black: bool) -> Arc<RwLock<Self>> {
-        let model = OnDeviceModel::load("renju_15x15_model").expect("Unable to load saved model");
-
-        let ai_player = AiPlayer::new(model, 0 /*we will rollout manually */);
+        let ai_player = AiPlayer::new();
         let max_threads = (num_cpus::get() - 2).max(1);
         let instance = Arc::new(RwLock::new(Self {
             ai_player: Arc::new(ai_player),
@@ -127,14 +126,12 @@ impl HumanVsMachineMatch {
         }
     }
 
-    async fn think<T>(
+    async fn think(
         board: RenjuBoard,
         choices: Vec<(usize, usize)>,
         thinking: Arc<AtomicBool>,
-        ai_player: Arc<AiPlayer<T>>,
-    ) where
-        T: RenjuModel + Send,
-    {
+        ai_player: Arc<AiPlayer>,
+    ) {
         while thinking.load(Ordering::SeqCst) {
             ai_player.rollout(board.clone(), &choices).await;
         }
@@ -239,5 +236,96 @@ impl HumanVsMachineMatch {
         }
 
         state
+    }
+}
+
+static mut MODEL: Option<OnDeviceModel> = None;
+static INIT: Once = Once::new();
+
+fn predict(promise: PredictionPromise) {
+    let model = unsafe {
+        INIT.call_once(|| {
+            MODEL =
+                Some(OnDeviceModel::load("renju_15x15_model").expect("Unable to load saved model"));
+        });
+        MODEL.as_ref().unwrap()
+    };
+    let state_batch = vec![promise.get_state_tensor().clone()];
+    let (prob_matrix, score) = model
+        .predict(&state_batch, false)
+        .expect("Unable to predict");
+    promise.resolve(prob_matrix, score);
+}
+
+pub struct AiPlayer {
+    tree: MonteCarloTree,
+    // temperature parameter in (0, 1] controls the level of exploration
+    temperature: f32,
+    visit_time_matrix: AtomicCell<SquareMatrix<u32>>,
+}
+
+impl AiPlayer {
+    pub fn get_visit_times(self: &Self) -> SquareMatrix<u32> {
+        self.visit_time_matrix.load()
+    }
+    pub fn new() -> Self {
+        let tree = MonteCarloTree::new(5f32);
+        Self {
+            tree: tree,
+            temperature: 1e-3,
+            visit_time_matrix: AtomicCell::new(SquareMatrix::default()),
+        }
+    }
+
+    pub async fn rollout(self: &Self, board: RenjuBoard, choices: &Vec<(usize, usize)>) {
+        self.tree
+            .rollout(board, choices, |promise| predict(promise))
+            .await
+            .expect("rollout failed")
+    }
+
+    pub async fn do_next_move(
+        self: &Self,
+        board: &RenjuBoard,
+        choices: &Vec<(usize, usize)>,
+    ) -> (usize, usize) {
+        let pos = if choices.len() == 1 {
+            choices[0]
+        } else {
+            let move_prob_pairs: Vec<((usize, usize), f32)> = self
+                .tree
+                .get_move_probability(self.temperature)
+                .await
+                .expect("get_move_probability() failed");
+
+            let pair = move_prob_pairs
+                .into_iter()
+                .max_by(|(_, left_score), (_, right_score)| {
+                    left_score
+                        .partial_cmp(right_score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .expect("At least one pair");
+            pair.0
+        };
+
+        let visit_time_matrix = self
+            .tree
+            .get_visit_times()
+            .await
+            .expect("get_visit_times() failed");
+        self.visit_time_matrix.store(visit_time_matrix);
+        self.tree
+            .update_with_position(pos)
+            .await
+            .expect("update_with_position() failed");
+        pos
+    }
+
+    pub async fn notify_opponent_moved(self: &Self, _: &RenjuBoard, pos: (usize, usize)) {
+        self.tree
+            .update_with_position(pos)
+            .await
+            .expect("update_with_position failed");
     }
 }
