@@ -8,7 +8,6 @@ extern crate tensorflow;
 
 use clap::{Parser, Subcommand};
 
-use tokio::process::{Child, Command};
 use tokio::time::{sleep, Duration};
 
 mod contest;

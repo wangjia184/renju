@@ -8,7 +8,7 @@ use std::sync::atomic::Ordering;
 use tokio::sync::RwLock;
 
 use std::sync::{atomic::AtomicBool, Arc, Mutex, Once};
-use tokio::task::JoinHandle;
+use tokio::task::{self, JoinHandle};
 
 static SINGLETON: Mutex<Option<Arc<RwLock<HumanVsMachineMatch>>>> = Mutex::new(None);
 
@@ -89,7 +89,7 @@ impl BoardInfo {
 impl HumanVsMachineMatch {
     pub async fn new(human_play_black: bool) -> Arc<RwLock<Self>> {
         let ai_player = AiPlayer::new();
-        let max_threads = (num_cpus::get() - 2).max(1);
+        let max_threads = (num_cpus::get() - 0).max(1);
         let instance = Arc::new(RwLock::new(Self {
             ai_player: Arc::new(ai_player),
             board: RenjuBoard::default(),
@@ -122,7 +122,7 @@ impl HumanVsMachineMatch {
             stones: self.board.get_stones(),
             state: self.state,
             last: self.board.get_last_move(),
-            visited: self.ai_player.get_visit_times(),
+            visited: self.ai_player.get_visit_time_matrix(),
         }
     }
 
@@ -133,7 +133,7 @@ impl HumanVsMachineMatch {
         ai_player: Arc<AiPlayer>,
     ) {
         while thinking.load(Ordering::SeqCst) {
-            ai_player.rollout(board.clone(), &choices).await;
+            ai_player.think(board.clone(), &choices).await;
         }
     }
 
@@ -265,7 +265,7 @@ pub struct AiPlayer {
 }
 
 impl AiPlayer {
-    pub fn get_visit_times(self: &Self) -> SquareMatrix<u32> {
+    pub fn get_visit_time_matrix(self: &Self) -> SquareMatrix<u32> {
         self.visit_time_matrix.load()
     }
     pub fn new() -> Self {
@@ -277,16 +277,18 @@ impl AiPlayer {
         }
     }
 
-    pub async fn rollout(self: &Self, board: RenjuBoard, choices: &Vec<(usize, usize)>) {
+    pub async fn think(self: &Self, board: RenjuBoard, choices: &Vec<(usize, usize)>) {
         self.tree
-            .rollout(board, choices, |promise| predict(promise))
+            .rollout(board, choices, |promise| {
+                task::spawn_blocking(move || predict(promise));
+            })
             .await
             .expect("rollout failed")
     }
 
     pub async fn do_next_move(
         self: &Self,
-        board: &RenjuBoard,
+        _: &RenjuBoard,
         choices: &Vec<(usize, usize)>,
     ) -> (usize, usize) {
         let pos = if choices.len() == 1 {
