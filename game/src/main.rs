@@ -12,12 +12,12 @@ use tokio::time::{sleep, Duration};
 
 mod contest;
 mod game;
-mod mcts;
-
 mod human;
+mod mcts;
 mod model;
-
+mod selfplay;
 use human::MatchState;
+use selfplay::Trainer;
 
 static ABOUT_TEXT: &str = "Renju game ";
 
@@ -47,13 +47,9 @@ enum Verb {
         address: String,
     },
 
-    /// Exporting matches to dataset for training
+    /// Self play and train
     #[clap(after_help=TRAIN_HELP_TEXT)]
-    Train {
-        /// tcp port to listen on
-        #[clap(default_value_t = 55590)]
-        port: u16,
-    },
+    Train {},
 
     /// contest between two model
     #[clap()]
@@ -73,107 +69,11 @@ async fn main() {
     let args = Arguments::parse();
 
     match args.verb {
-        /*
-               Some(Verb::Produce { address }) => {
-                   println!("Connecting to {}", address);
-                   let mut stream = TcpStream::connect(address)
-                       .await
-                       .expect("Unable to connect to trainer");
-                   println!("Connection is established");
-                   let (r, w) = stream.split();
+        Some(Verb::Train {}) => {
+            let mut trainer = Trainer::new();
+            trainer.run().await;
+        }
 
-                   let (mut producer, mut rx, latest_parameters) = DataProducer::new();
-
-                   let mut join_handle = tokio::task::spawn_blocking(move || {
-                       producer.run();
-                   });
-
-                   // send data set back to trainer
-                   let mut output_stream = FramedWrite::new(w, LengthDelimitedCodec::new());
-
-                   let mut input_stream = FramedRead::new(r, LengthDelimitedCodec::new());
-
-                   loop {
-                       tokio::select! {
-                           result = input_stream.next() => {
-                               match result {
-                                   Some(read) => {
-                                       match read {
-                                           Ok(data) => {
-                                               *latest_parameters.lock().unwrap() = Some(data.freeze());
-                                               //println!("Model parameters have been updated");
-                                           }
-                                           Err(e) => {
-                                               eprintln!("Connection is lost: {}", e);
-                                               return;
-                                           }
-                                       }
-                                   },
-                                   None => {
-                                       eprintln!("Connection is closed");
-                                       return
-                                   }
-                               }
-                           }
-                           option = rx.recv() => {
-                               match option {
-                                   Some(item) => {
-                                       let payload : Bytes = item.into();
-                                       if let Err(e) = output_stream.send(payload).await {
-                                           eprintln!("Failed to send data back to trainer. {}", e);
-                                           return;
-                                       }
-                                   },
-                                   None => {
-                                       eprintln!("Channel is closed");
-                                       return
-                                   }
-                               }
-                           }
-                           _ = &mut join_handle => {
-                               println!("Data producer exited");
-                               return;
-                           }
-                       }
-                   }
-               }
-
-               Some(Verb::Train { port }) => {
-                   let (train_data_tx, train_data_rx) = mpsc::unbounded_channel::<TrainDataItem>();
-                   let (params_tx, params_rx) = watch::channel(Bytes::new());
-                   // start tcp server, payload_tx is used to broadcast model parameters
-                   let mut server = TcpServer::start(port, train_data_tx, params_rx)
-                       .await
-                       .expect("Unable to start TCP server");
-
-                   let number = if num_cpus::get() > 2 {
-                       num_cpus::get() - 2
-                   } else {
-                       1
-                   };
-                   let address = format!("127.0.0.1:{}", port);
-                   let mut children = Vec::with_capacity(number);
-                   for _ in 0..number {
-                       let child = start_child_process(vec!["produce", &address])
-                           .expect("Unable to start child process");
-                       children.push(child);
-                   }
-
-                   let _join_handle = tokio::spawn(async move {
-                       let mut trainer = Trainer::new(params_tx, train_data_rx);
-                       trainer.run().await;
-                   });
-
-                   // TODO : multiple wait
-                   server.run().await.expect("Unable to accept connection");
-                   drop(children);
-               }
-
-               Some(Verb::Contest {
-                   old_model,
-                   new_model,
-               }) => contest::run(&old_model, &new_model),
-        */
         _ => {
             tauri::Builder::default()
                 .invoke_handler(tauri::generate_handler![new_match, do_move])

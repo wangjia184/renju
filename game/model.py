@@ -200,6 +200,7 @@ def train(state_batch, prob_batch, score_batch, lr):
     prob_batch = tf.reshape(prob_batch, [batch_size, 225])
     score_batch = tf.reshape(score_batch, [batch_size, 1])
 
+
     loss = renju.model.evaluate(state_batch, [prob_batch, score_batch], batch_size=batch_size, verbose=0)
     action_probs, pred_scores = renju.model.predict_on_batch(state_batch)
 
@@ -222,6 +223,17 @@ def train(state_batch, prob_batch, score_batch, lr):
     renju.model.fit( state_batch, [prob_batch, score_batch], batch_size=batch_size)
     return (loss[0], entropy)
 
+def predict_batch(state_batch):
+    state_batch = tf.convert_to_tensor(state_batch, dtype=tf.float32)
+    try:
+        probs, scores = renju.model.predict_on_batch(state_batch)
+    except:
+        traceback.print_exc()
+        raise
+    # probs shape=(None, 225); scores shape=(None, 1), [[-0.14458223]]
+
+    return probs.tolist(), scores.tolist()
+
 """infer and return the first input result (probability and score)"""
 def predict(state_batch):
     state_batch = tf.convert_to_tensor(state_batch, dtype=tf.float32)
@@ -231,6 +243,7 @@ def predict(state_batch):
         traceback.print_exc()
         raise
     # probs shape=(None, 225); scores shape=(None, 1), [[-0.14458223]]
+
 
      
     batch_size = tf.shape(state_batch)[0]

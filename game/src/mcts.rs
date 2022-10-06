@@ -114,14 +114,14 @@ impl TreeNodeChildren {
 }
 
 impl TreeNode {
-    fn new(prob: f32) -> Arc<AtomicCell<Receiver<Self>>> {
+    fn new(prob: f32, action: Option<(usize, usize)>) -> Arc<AtomicCell<Receiver<Self>>> {
         let (tx, rx) = oneshot::channel();
 
         let node = Arc::new(AtomicCell::new(rx));
 
         let child = TreeNode {
             stones: 0,
-            action: None,
+            action: action,
             parent: None,
             current: Arc::downgrade(&node),
             children: HashMap::new(),
@@ -285,6 +285,11 @@ pub struct PredictionPromise {
     state_tensor: StateTensor,
     replier: Option<Sender<(SquareMatrix, f32)>>,
 }
+impl Drop for PredictionPromise {
+    fn drop(&mut self) {
+        assert!(self.replier.is_none()); //the promise must be resolved before drop
+    }
+}
 impl PredictionPromise {
     fn new(state_tensor: StateTensor) -> (Self, Receiver<(SquareMatrix, f32)>) {
         let (tx, rx) = oneshot::channel();
@@ -317,7 +322,14 @@ impl MonteCarloTree {
     pub fn new(c_puct: f32) -> Self {
         Self {
             c_puct: c_puct,
-            root: RwLock::new(TreeNode::new(1f32)),
+            root: RwLock::new(TreeNode::new(1f32, None)),
+        }
+    }
+
+    pub fn new_with_position(pos: (usize, usize), c_puct: f32) -> Self {
+        Self {
+            c_puct: c_puct,
+            root: RwLock::new(TreeNode::new(1f32, Some(pos))),
         }
     }
 

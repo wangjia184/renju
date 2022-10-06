@@ -44,7 +44,9 @@
                     "kind": "bin"
                 }
             },
-            "args": [],
+            "args": [
+                "train"
+            ],
             "env": {
                 "DYLD_LIBRARY_PATH": "/opt/homebrew/opt/tensorflow/lib"
             },

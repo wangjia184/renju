@@ -1,7 +1,7 @@
 use crate::game::{RenjuBoard, SquareMatrix, TerminalState};
 
 use crate::mcts::{MonteCarloTree, PredictionPromise};
-use crate::model::{OnDeviceModel, RenjuModel};
+use crate::model::OnDeviceModel;
 
 use crossbeam::atomic::AtomicCell;
 use std::sync::atomic::Ordering;
@@ -251,9 +251,7 @@ fn predict(promise: PredictionPromise) {
         MODEL.as_ref().unwrap()
     };
     let state_batch = vec![promise.get_state_tensor().clone()];
-    let (prob_matrix, score) = model
-        .predict(&state_batch, false)
-        .expect("Unable to predict");
+    let (prob_matrix, score) = model.predict(&state_batch).expect("Unable to predict");
     promise.resolve(prob_matrix, score);
 }
 

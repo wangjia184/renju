@@ -31,26 +31,6 @@ pub struct OnDeviceModel {
     predict_output: Operation,
 }
 
-pub trait RenjuModel {
-    fn train(
-        self: &Self,
-        state_tensors: &[StateTensor],
-        prob_matrixes: &[SquareMatrix],
-        scores: &[f32],
-        lr: f32,
-    ) -> PyResult<(f32, f32)>;
-
-    fn predict(
-        self: &Self,
-        state_tensors: &[StateTensor],
-        use_log_prob: bool, // true to return log probability
-    ) -> PyResult<(SquareMatrix<f32>, f32)>;
-
-    fn export(self: &Self) -> PyResult<Bytes>;
-
-    fn import(self: &Self, buffer: Bytes) -> PyResult<()>;
-}
-
 //
 impl PolicyValueModel {
     pub fn new(filename: &str) -> PyResult<Self> {
@@ -75,17 +55,15 @@ impl PolicyValueModel {
         })
     }
 
-    pub fn get_best() -> Self {
-        let renju_model =
-            PolicyValueModel::new("/Users/jerry/projects/renju/renju.git/game/model.py")
-                .expect("Unable to load model");
+    pub fn get_latest() -> Self {
+        let renju_model = PolicyValueModel::new("model.py").expect("Unable to load model");
 
         if let Ok(mut file) = OpenOptions::new()
             .read(true)
             .write(false)
             .truncate(false)
             .create(false)
-            .open("best.ckpt")
+            .open("latest.weights")
         {
             let mut buffer = Vec::<u8>::with_capacity(100000);
             if let Ok(size) = file.read_to_end(&mut buffer) {
@@ -101,10 +79,48 @@ impl PolicyValueModel {
 
         renju_model
     }
-}
 
-impl RenjuModel for PolicyValueModel {
-    fn train(
+    pub fn predict_batch(
+        self: &Self,
+        state_tensors: Vec<StateTensor>,
+    ) -> PyResult<Vec<(SquareMatrix<f32>, f32)>> {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            py.check_signals()?;
+            let predict_fn: Py<PyAny> = self.module.as_ref(py).getattr("predict_batch")?.into();
+
+            let batch_size = state_tensors.len();
+            let state_batch: &PyList = PyList::new(py, state_tensors);
+
+            let args = PyTuple::new(py, &[state_batch]);
+            let result = predict_fn.call1(py, args)?;
+            let tuple = <PyTuple as PyTryFrom>::try_from(result.as_ref(py))?;
+
+            let prob_matrix_list = <PyList as PyTryFrom>::try_from(tuple.get_item(0)?)?;
+            let score_list = <PyList as PyTryFrom>::try_from(tuple.get_item(1)?)?;
+            assert_eq!(prob_matrix_list.len(), batch_size);
+            assert_eq!(score_list.len(), batch_size);
+
+            let mut pairs = Vec::with_capacity(batch_size);
+            for index in 0..batch_size {
+                let probs = <PyList as PyTryFrom>::try_from(prob_matrix_list.get_item(index)?)?;
+                assert_eq!(probs.len(), BOARD_SIZE * BOARD_SIZE);
+                let mut prob_matrix: SquareMatrix<f32> = SquareMatrix::default();
+                for (idx, prob) in probs.iter().enumerate() {
+                    let probability = prob.extract::<f32>()?;
+                    prob_matrix[idx / BOARD_SIZE][idx % BOARD_SIZE] = probability;
+                }
+
+                let score: f32 = score_list.get_item(index)?.get_item(0)?.extract()?;
+
+                pairs.push((prob_matrix, score));
+            }
+
+            Ok(pairs)
+        })
+    }
+
+    pub fn train(
         self: &Self,
         state_tensors: &[StateTensor],
         prob_matrixes: &[SquareMatrix],
@@ -129,7 +145,7 @@ impl RenjuModel for PolicyValueModel {
         })
     }
 
-    fn predict(
+    pub fn predict(
         self: &Self,
         state_tensors: &[StateTensor],
         use_log_prob: bool,
@@ -162,7 +178,7 @@ impl RenjuModel for PolicyValueModel {
         })
     }
 
-    fn export(self: &Self) -> PyResult<Bytes> {
+    pub fn export(self: &Self) -> PyResult<Bytes> {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|py| {
             let export_fn: Py<PyAny> = self.module.as_ref(py).getattr("export_parameters")?.into();
@@ -175,7 +191,7 @@ impl RenjuModel for PolicyValueModel {
         })
     }
 
-    fn import(self: &Self, buffer: Bytes) -> PyResult<()> {
+    pub fn import(self: &Self, buffer: Bytes) -> PyResult<()> {
         Python::with_gil(|py| {
             let import_fn: Py<PyAny> = self.module.as_ref(py).getattr("import_parameters")?.into();
 
@@ -229,26 +245,13 @@ impl OnDeviceModel {
 
         Ok(model)
     }
-}
 
-impl RenjuModel for OnDeviceModel {
-    fn train(
-        self: &Self,
-        _state_tensors: &[StateTensor],
-        _prob_matrixes: &[SquareMatrix],
-        _scores: &[f32],
-        _lr: f32,
-    ) -> PyResult<(f32, f32)> {
-        unimplemented!()
-    }
-
-    fn predict(
+    pub fn predict(
         self: &Self,
         state_tensors: &[StateTensor],
-        use_log_prob: bool, // true to return log probability
     ) -> PyResult<(SquareMatrix<f32>, f32)> {
         assert!(!state_tensors.is_empty());
-        assert_eq!(use_log_prob, false);
+
         let state_batch = Tensor::<f32>::new(&[
             state_tensors.len() as u64,
             state_tensors[0].len() as u64,
@@ -287,13 +290,5 @@ impl RenjuModel for OnDeviceModel {
         });
 
         Ok((matrix, value_tensor[0]))
-    }
-
-    fn export(self: &Self) -> PyResult<Bytes> {
-        unimplemented!()
-    }
-
-    fn import(self: &Self, _: Bytes) -> PyResult<()> {
-        unimplemented!()
     }
 }
