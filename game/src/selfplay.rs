@@ -43,7 +43,7 @@ impl Trainer {
             batch_size: 500,
             parallel_num: 30, // parallel self-play matches for a single open pattern
             mcts_c_puct: 5f32,
-            mcts_iterations: 200,
+            mcts_iterations: 400,
             epochs: 5,
             learn_rate: 1e-3,
             lr_multiplier: 1f32,
