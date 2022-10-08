@@ -1,5 +1,5 @@
 use bytemuck::cast_slice;
-use bytes::Bytes;
+
 use ndarray::Array;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -41,9 +41,9 @@ impl Trainer {
     pub fn new() -> Self {
         Self {
             batch_size: 500,
-            parallel_num: 10, // parallel self-play matches for a single open pattern
-            mcts_c_puct: 1f32,
-            mcts_iterations: 10,
+            parallel_num: 30, // parallel self-play matches for a single open pattern
+            mcts_c_puct: 5f32,
+            mcts_iterations: 200,
             epochs: 5,
             learn_rate: 1e-3,
             lr_multiplier: 1f32,
@@ -55,6 +55,8 @@ impl Trainer {
         let mut option = Some(PolicyValueModel::get_latest());
         loop {
             assert!(option.is_some());
+
+            let now = Instant::now();
             let (handles, predict_rx) = self.start_groups();
 
             // handle predictions and wait all complection
@@ -69,7 +71,12 @@ impl Trainer {
                     handle.await.expect("Error in TrainGroup");
                 match_outputs.append(&mut vectors);
             }
-            println!("Total matches = {}", match_outputs.len());
+            println!(
+                "Total matches = {}. {}s",
+                match_outputs.len(),
+                now.elapsed().as_secs()
+            );
+
             let data_sets = self.collect_data_set(match_outputs);
             println!(
                 "{} batches. each size is {}",
@@ -144,27 +151,27 @@ impl Trainer {
             .collect();
 
         tokio::task::spawn_blocking(move || {
-            let now = Instant::now();
+            //let now = Instant::now();
 
             let pairs = model
                 .predict_batch(state_tensor_batch)
                 .expect("Unable to predict batch");
 
-            let elapsed = now.elapsed().as_millis();
-            let batch_size = promises.len();
+            //let elapsed = now.elapsed().as_millis();
+            //let batch_size = promises.len();
 
             promises
                 .into_iter()
                 .enumerate()
                 .for_each(|(index, promise)| promise.resolve(pairs[index].0, pairs[index].1));
-
+            /*
             tokio::task::spawn_blocking(move || {
                 println!(
                     "avg {:.2} ms batch size {}",
                     batch_size as f32 / elapsed as f32,
                     batch_size,
                 );
-            });
+            }); */
             model
         })
     }
@@ -280,9 +287,9 @@ impl Trainer {
         model: PolicyValueModel,
         data_sets: Vec<DataSet>,
     ) -> PolicyValueModel {
-        for data_set in data_sets {
+        for (index, data_set) in data_sets.iter().enumerate() {
             let now = Instant::now();
-            let (old_log_prob_matrix, old_value) = model
+            let (old_log_prob_matrix, _old_value) = model
                 .predict(&[data_set.state_tensor_batch[0].clone()], true)
                 .expect("Failed to predict");
 
@@ -303,7 +310,7 @@ impl Trainer {
                     )
                     .expect("Failed to train");
 
-                let (new_log_prob_matrix, new_value) = model
+                let (new_log_prob_matrix, _new_value) = model
                     .predict(&[data_set.state_tensor_batch[0].clone()], true)
                     .expect("Failed to predict");
 
@@ -324,7 +331,9 @@ impl Trainer {
             let elapsed = now.elapsed();
 
             println!(
-                "lr={}; loss={}; entropy={}; kl={}; elapsed={:.2?}",
+                "{}/{} lr={}; loss={}; entropy={}; kl={}; elapsed={:.2?}",
+                index + 1,
+                data_sets.len(),
                 self.learn_rate * self.lr_multiplier,
                 loss,
                 entropy,
@@ -548,7 +557,7 @@ impl SelfPlayer {
         }
     }
 
-    fn choose_with_dirichlet_noice(probabilities: &Vec<f32>) -> usize {
+    fn choose_with_dirichlet_noice(probabilities: &Vec<f32>, noise_percentage: f32) -> usize {
         assert!(probabilities.len() > 1);
         let concentration = vec![0.3f32; probabilities.len()];
         let dirichlet = Dirichlet::new(&concentration).unwrap();
@@ -559,7 +568,9 @@ impl SelfPlayer {
         let probabilities: Vec<f32> = probabilities
             .iter()
             .enumerate()
-            .map(|(index, prob)| *prob * 0.75 + 0.25 * samples[index])
+            .map(|(index, prob)| {
+                *prob * (1f32 - noise_percentage) + noise_percentage * samples[index]
+            })
             .collect();
 
         let dist = WeightedIndex::new(&probabilities).unwrap();
@@ -582,7 +593,13 @@ impl SelfPlayer {
 
             let vector: Vec<_> = pairs.iter().map(|(_, probability)| *probability).collect();
 
-            let index = Self::choose_with_dirichlet_noice(&vector);
+            // current move is not placed in board yet
+            let noise_percentage = match board.get_stones() {
+                0..=4 => 0.6f32,
+                5..=15 => 0.25f32,
+                _ => 0.15f32,
+            };
+            let index = Self::choose_with_dirichlet_noice(&vector, noise_percentage);
 
             let pos = pairs[index].0;
             if !board.is_forbidden(pos) {

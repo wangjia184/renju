@@ -17,57 +17,109 @@ print( "tensorflow_probability version:", tfp.__version__ )
 
 def create_model(board_width, board_height):
 
+    l2_penalty_beta = 1e-4
+    data_format="channels_last"
+
+    class ResBlock(tf.keras.Model):
+        def __init__(self, filters):
+            super().__init__()
+
+            self.shortcut = tf.keras.Sequential()
+
+            self.conv1 = tf.keras.layers.Conv2D(filters, 
+                kernel_size=(3, 3), 
+                strides=1, 
+                data_format=data_format, 
+                kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta),
+                padding='same')
+
+            self.bn1 = tf.keras.layers.BatchNormalization()
+
+            self.relu1 = tf.keras.layers.ReLU()
+
+            self.conv2 = tf.keras.layers.Conv2D(filters, 
+                kernel_size=(3, 3), 
+                strides=1, 
+                data_format=data_format, 
+                kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta),
+                padding='same')
+            self.bn2 = tf.keras.layers.BatchNormalization()
+            
+            self.relu = tf.keras.layers.ReLU()
+        def call(self, input):
+            shortcut = self.shortcut(input)
+
+            input = self.conv1(input)
+            input = self.bn1(input)
+            input = self.relu1(input)
+
+            input = self.conv2(input)
+            input = self.bn2(input)
+
+            input = input + shortcut
+            return self.relu(input)
+
     class RenjuModel(tf.Module):
         def __init__(self):
-            l2_penalty_beta = 1e-4
+            
 
             # Define the tensorflow neural network
             # 1. Input:
             self.inputs = tf.keras.Input( shape=(4, board_height, board_width), dtype=tf.dtypes.float32, name="input")
 
+            
+
             # convert from  NCHW(channels_first) to NHWC(channels_last) because channels_first is not supported by CPU
-            self.permuted_inputs = tf.keras.layers.Permute((2,3,1))(self.inputs)
+            if data_format == 'channels_last':
+                self.source = tf.keras.layers.Permute((2,3,1))(self.inputs)
+            else:
+                self.source = self.inputs
 
-
-            # 2. Common Networks Layers
+             # 2. Common Networks Layers
             self.conv1 = tf.keras.layers.Conv2D( name="conv1",
                 filters=32,
                 kernel_size=(3, 3),
                 padding="same",
-                data_format="channels_last",
-                activation=tf.keras.activations.relu,
+                data_format=data_format,
                 kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta)
-                )(self.permuted_inputs)
+                )(self.source)
 
-            self.conv2 = tf.keras.layers.Conv2D( name="conv2", 
-                filters=64, 
-                kernel_size=(3, 3), 
-                padding="same", 
-                data_format="channels_last", 
-                activation=tf.keras.activations.relu,
-                kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta)
-                )(self.conv1)
-
-            self.conv3 = tf.keras.layers.Conv2D( name="conv3",
-                filters=128,
-                kernel_size=(3, 3),
-                padding="same",
-                data_format="channels_last",
-                activation=tf.keras.activations.relu,
-                kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta)
-                )(self.conv2)
+            self.reslayer = tf.keras.Sequential([
+                ResBlock(32),
+                ResBlock(32),
+                ResBlock(32),
+                ResBlock(32),
+                ResBlock(32),
+                ResBlock(32),
+                ResBlock(32),
+                ResBlock(32),
+                ResBlock(32),
+                ResBlock(32),
+                ResBlock(32),
+                ResBlock(32),
+                ResBlock(32),
+                ResBlock(32),
+                ResBlock(32),
+                ResBlock(32),
+                ResBlock(32),
+                ResBlock(32),
+                ResBlock(32),
+            ], name='resblocks')(self.conv1)
 
             # 3-1 Action Networks
             self.action_conv = tf.keras.layers.Conv2D( name="action_conv",
-                filters=4,
+                filters=2,
                 kernel_size=(1, 1),
-                data_format="channels_last",
-                activation=tf.keras.activations.relu,
+                data_format=data_format,
                 kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta)
-                )(self.conv3)
+                )(self.reslayer)
+
+            self.action_bn = tf.keras.layers.BatchNormalization(name="action_bn")(self.action_conv)
+
+            self.action_act = tf.keras.layers.ReLU(name="action_activation")(self.action_bn)
 
             # flatten tensor
-            self.action_conv_flat = tf.keras.layers.Flatten()(self.action_conv)
+            self.action_conv_flat = tf.keras.layers.Flatten(name="action_flatten")(self.action_act)
 
             # 3-2 Full connected layer, the output is the log probability of moves
             # on each slot on the board
@@ -77,19 +129,24 @@ def create_model(board_width, board_height):
                 kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta)
                 )(self.action_conv_flat)
 
+
             # 4 Evaluation Networks
             self.evaluation_conv = tf.keras.layers.Conv2D( name="evaluation_conv",
-                filters=2,
+                filters=1,
                 kernel_size=(1, 1),
-                data_format="channels_last",
-                activation=tf.keras.activations.relu,
+                data_format=data_format,
                 kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta)
-                )(self.conv3)
+                )(self.reslayer)
 
-            self.evaluation_conv_flat = tf.keras.layers.Flatten()(self.evaluation_conv)
+            self.evaluation_bn = tf.keras.layers.BatchNormalization(name="evaluation_bn")(self.evaluation_conv)
 
-            self.evaluation_fc1 = tf.keras.layers.Dense( 64,
+            self.evaluation_act = tf.keras.layers.ReLU(name="evaluation_activation")(self.evaluation_bn)
+
+            self.evaluation_conv_flat = tf.keras.layers.Flatten(name="evaluation_flatten")(self.evaluation_act)
+
+            self.evaluation_fc1 = tf.keras.layers.Dense( 256,
                 name="evaluation_fc1",
+                activation=tf.keras.activations.relu,
                 kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta)
                 )(self.evaluation_conv_flat)
 
@@ -103,45 +160,13 @@ def create_model(board_width, board_height):
 
             self.model.summary()
  
-            self.lr = tf.Variable(0.002, trainable=False, dtype=tf.dtypes.float32)
+            self.lr = tf.Variable(0.001, trainable=False, dtype=tf.dtypes.float32)
 
             # loss = (z - v)^2 + pi^T * log(p) + c||theta||^2
             self.model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate = self.lr),
                     loss=[tf.keras.losses.CategoricalCrossentropy(), tf.keras.losses.MeanSquaredError()])
 
 
-
-
-
-
-        @tf.function
-        def export_param(self):
-            args = []
-            
-            for weight in self.model.weights:
-                args.append( tf.strings.join( [weight.name,
-                    tf.io.encode_base64(tf.io.serialize_tensor(weight.read_value()))]
-                    , ">"))
-            
-            encoded_str = tf.strings.join(args, "!")
-            return encoded_str
-
-
-        @tf.function(input_signature=[tf.TensorSpec(shape=[], dtype=tf.string)])
-        def import_param(self, encoded_str):
-            args = tf.strings.split(encoded_str, sep=tf.convert_to_tensor('!'))
-            for arg in args:
-                pair = tf.strings.split( arg, sep=tf.convert_to_tensor('>'))
-                tensor_value = tf.io.parse_tensor(tf.io.decode_base64(pair[1]), out_type=tf.float32)
-                
-                for weight in self.model.weights:
-                    if tf.math.equal( tf.convert_to_tensor(weight.name), pair[0]):
-                        weight.assign(tensor_value)
-                        #tf.print( weight.name, "Assigned")
-                
-            return encoded_str
-            
-        
 
         @tf.function(input_signature=[tf.TensorSpec(shape=[], dtype=tf.string)])
         def save(self, checkpoint_path):
@@ -169,6 +194,15 @@ def create_model(board_width, board_height):
             probs, scores = renju.model(state_batch)
             # probs shape=(None, 225); scores shape=(None, 1), [[-0.14458223]]
             return probs[0], scores[0][0]
+
+        @tf.function(input_signature=[
+            tf.TensorSpec([None, 4, board_height, board_width], tf.float32),
+        ])
+        def predict_batch(self, state_batch):
+            probs, scores = renju.model(state_batch)
+            # probs shape=(None, 225); scores shape=(None, 1), [[-0.14458223]]
+            return probs, scores
+        
 
 
     return RenjuModel()
@@ -284,7 +318,7 @@ def save_model(folder_name):
                 'predict': renju.predict.get_concrete_function()
             })
 
-#with open("best.ckpt", mode='rb') as file:
-#    buffer = file.read()
-#    import_parameters(buffer)
-#save_model('renju_15x15_model')
+with open("latest.weights", mode='rb') as file:
+    buffer = file.read()
+    import_parameters(buffer)
+save_model('saved_model/20221008')

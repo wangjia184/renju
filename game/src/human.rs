@@ -245,8 +245,9 @@ static INIT: Once = Once::new();
 fn predict(promise: PredictionPromise) {
     let model = unsafe {
         INIT.call_once(|| {
-            MODEL =
-                Some(OnDeviceModel::load("renju_15x15_model").expect("Unable to load saved model"));
+            MODEL = Some(
+                OnDeviceModel::load("saved_model/20221008").expect("Unable to load saved model"),
+            );
         });
         MODEL.as_ref().unwrap()
     };
