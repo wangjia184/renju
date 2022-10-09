@@ -5,6 +5,7 @@ Author : Jerry.Wang  vcer#qq.com
 """
 import traceback
 import pickle
+import pathlib
 import numpy as np
 import platform
 import tensorflow as tf
@@ -321,4 +322,14 @@ def save_model(folder_name):
 with open("latest.weights", mode='rb') as file:
     buffer = file.read()
     import_parameters(buffer)
-save_model('saved_model/20221009')
+#save_model('saved_model/20221010')
+
+converter = tf.lite.TFLiteConverter.from_keras_model(renju.model)
+converter.optimizations = [tf.lite.Optimize.DEFAULT]
+tflite_model = converter.convert()
+
+tflite_models_dir = pathlib.Path("./tflite_model/")
+tflite_models_dir.mkdir(exist_ok=True, parents=True)
+# Save the quantized model:
+tflite_model_quant_file = tflite_models_dir/"xx.tflite"
+tflite_model_quant_file.write_bytes(tflite_model)

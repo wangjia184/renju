@@ -41,7 +41,7 @@ impl Trainer {
     pub fn new() -> Self {
         Self {
             batch_size: 500,
-            parallel_num: 15, // parallel self-play matches for a single open pattern
+            parallel_num: 10, // parallel self-play matches for a single open pattern
             mcts_c_puct: 5f32,
             mcts_iterations: 400,
             epochs: 5,
