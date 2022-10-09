@@ -321,4 +321,4 @@ def save_model(folder_name):
 with open("latest.weights", mode='rb') as file:
     buffer = file.read()
     import_parameters(buffer)
-save_model('saved_model/20221008')
+save_model('saved_model/20221009')

@@ -19,21 +19,19 @@
 // <<Watch the Unobserved: A Simple Approach to Parallelizing Monte Carlo Tree Search>>
 
 use crate::game::{RenjuBoard, SquareMatrix, StateTensor, TerminalState};
-use crossbeam::atomic::AtomicCell;
+use flume::{Receiver as MpmcReceiver, RecvError, Sender as MpmcSender};
 use std::collections::HashMap;
 
 use std::sync::{Arc, Weak as ArcWeak};
-use tokio::sync::oneshot::error::RecvError;
-use tokio::sync::oneshot::{self, Receiver, Sender};
+use tokio::sync::oneshot::{self, Receiver as OneshotReceiver, Sender as OneshotSender};
 use tokio::sync::RwLock;
-
 // thread-safe tree node
 pub struct TreeNode {
     stones: u32, // number of stones on board without couting this node
     action: Option<(usize, usize)>,
-    parent: Option<ArcWeak<AtomicCell<Receiver<Self>>>>,
-    current: ArcWeak<AtomicCell<Receiver<Self>>>,
-    children: HashMap<(usize /*row*/, usize /*col*/), Arc<AtomicCell<Receiver<Self>>>>,
+    parent: Option<ArcWeak<(MpmcSender<Self>, MpmcReceiver<Self>)>>,
+    current: ArcWeak<(MpmcSender<Self>, MpmcReceiver<Self>)>,
+    children: HashMap<(usize /*row*/, usize /*col*/), Arc<(MpmcSender<Self>, MpmcReceiver<Self>)>>,
     visit_times: u32, // number of visited times
     probability: f32, // prior probability from policy network
 
@@ -51,13 +49,15 @@ pub struct TreeNode {
 }
 
 // opened tree node for read or update
-struct OpenedTreeNode(Option<TreeNode>, Option<Sender<TreeNode>>);
+struct OpenedTreeNode(
+    Option<TreeNode>,
+    Arc<(MpmcSender<TreeNode>, MpmcReceiver<TreeNode>)>,
+);
 impl Drop for OpenedTreeNode {
     fn drop(&mut self) {
         assert!(self.0.is_some());
-        assert!(self.1.is_some());
 
-        if let Err(_) = self.1.take().unwrap().send(self.0.take().unwrap()) {
+        if let Err(_) = self.1 .0.send(self.0.take().unwrap()) {
             panic!("Unable to send");
         }
     }
@@ -85,7 +85,7 @@ impl OpenedTreeNode {
 struct TreeNodeChildren {
     pairs: Vec<(
         (usize /*row*/, usize /*col*/),
-        Arc<AtomicCell<Receiver<TreeNode>>>,
+        Arc<(MpmcSender<TreeNode>, MpmcReceiver<TreeNode>)>,
     )>,
     parent_visit_times: u32,
 }
@@ -114,26 +114,27 @@ impl TreeNodeChildren {
 }
 
 impl TreeNode {
-    fn new(prob: f32, action: Option<(usize, usize)>) -> Arc<AtomicCell<Receiver<Self>>> {
-        let (tx, rx) = oneshot::channel();
-
-        let node = Arc::new(AtomicCell::new(rx));
+    fn new(
+        prob: f32,
+        action: Option<(usize, usize)>,
+    ) -> Arc<(MpmcSender<Self>, MpmcReceiver<Self>)> {
+        let tx_rx = Arc::new(flume::bounded(1));
 
         let child = TreeNode {
             stones: 0,
             action: action,
             parent: None,
-            current: Arc::downgrade(&node),
+            current: Arc::downgrade(&tx_rx),
             children: HashMap::new(),
             unobserved_times: 0,
             visit_times: 0,
             probability: prob,
             q: 0f32,
         };
-        if let Err(_) = tx.send(child) {
+        if let Err(_) = tx_rx.0.send(child) {
             panic!("tx.send(child) failed");
         }
-        node
+        tx_rx
     }
 
     // create a child
@@ -141,19 +142,17 @@ impl TreeNode {
         self: &mut Self,
         pos: (usize, usize),
         mut init: F,
-    ) -> Arc<AtomicCell<Receiver<Self>>>
+    ) -> Arc<(MpmcSender<TreeNode>, MpmcReceiver<TreeNode>)>
     where
         F: FnMut(&mut TreeNode),
     {
-        let (tx, rx) = oneshot::channel();
-
-        let node = Arc::new(AtomicCell::new(rx));
+        let tx_rx = Arc::new(flume::bounded(1));
 
         let mut child = TreeNode {
             stones: self.stones + 1,
             action: Some(pos),
             parent: Some(self.current.clone()), // link to this one
-            current: Arc::downgrade(&node),
+            current: Arc::downgrade(&tx_rx),
             children: HashMap::new(),
             unobserved_times: 0,
             visit_times: 0,
@@ -162,34 +161,32 @@ impl TreeNode {
         };
         init(&mut child);
 
-        self.children.insert(pos, node.clone());
-        if let Err(_) = tx.send(child) {
+        self.children.insert(pos, tx_rx.clone());
+        if let Err(_) = tx_rx.0.send(child) {
             panic!("tx.send(child) failed");
         }
-        node
+        tx_rx
     }
 
     async fn open_node(
-        reference: &Arc<AtomicCell<Receiver<Self>>>,
+        tx_rx: &Arc<(MpmcSender<TreeNode>, MpmcReceiver<TreeNode>)>,
     ) -> Result<OpenedTreeNode, RecvError> {
-        let (tx, rx) = oneshot::channel();
-        let prev_rx = reference.swap(rx);
-        let node = prev_rx.await?;
+        let node = tx_rx.1.recv_async().await?;
 
-        Ok(OpenedTreeNode(Some(node), Some(tx)))
+        Ok(OpenedTreeNode(Some(node), tx_rx.clone()))
     }
 
     // recursively access from specific node to its all ancestors till root
     async fn back_propagate(
-        mut reference: Arc<AtomicCell<Receiver<Self>>>,
+        mut tx_rx: Arc<(MpmcSender<TreeNode>, MpmcReceiver<TreeNode>)>,
         mut leaf_value: f32,
     ) -> Result<(), RecvError> {
         loop {
             leaf_value *= -1f32;
-            let mut current_node = Self::open_node(&reference).await?;
+            let mut current_node = Self::open_node(&tx_rx).await?;
             current_node.get_mut().update(leaf_value);
             if let Some(x) = current_node.get().parent.as_ref().and_then(|x| x.upgrade()) {
-                reference = x;
+                tx_rx = x;
             } else {
                 break;
             }
@@ -237,7 +234,7 @@ impl TreeNode {
     }
 
     async fn greedy_select_leaf(
-        self_ref: &Arc<AtomicCell<Receiver<Self>>>,
+        self_ref: &Arc<(MpmcSender<TreeNode>, MpmcReceiver<TreeNode>)>,
         c_puct: f32,
     ) -> Result<(OpenedTreeNode, Vec<(usize, usize)>), RecvError> {
         let mut moves = Vec::with_capacity(20);
@@ -261,7 +258,7 @@ impl TreeNode {
     }
 
     async fn enumerate_children<F>(
-        self_ref: &Arc<AtomicCell<Receiver<Self>>>,
+        self_ref: &Arc<(MpmcSender<TreeNode>, MpmcReceiver<TreeNode>)>,
         mut cb: F,
     ) -> Result<(), RecvError>
     where
@@ -283,7 +280,7 @@ impl TreeNode {
 // A promise object to be resolved when prediction is done
 pub struct PredictionPromise {
     state_tensor: StateTensor,
-    replier: Option<Sender<(SquareMatrix, f32)>>,
+    replier: Option<OneshotSender<(SquareMatrix, f32)>>,
 }
 impl Drop for PredictionPromise {
     fn drop(&mut self) {
@@ -291,7 +288,7 @@ impl Drop for PredictionPromise {
     }
 }
 impl PredictionPromise {
-    fn new(state_tensor: StateTensor) -> (Self, Receiver<(SquareMatrix, f32)>) {
+    fn new(state_tensor: StateTensor) -> (Self, OneshotReceiver<(SquareMatrix, f32)>) {
         let (tx, rx) = oneshot::channel();
         (
             Self {
@@ -315,7 +312,7 @@ impl PredictionPromise {
 // Monte Carlo tree search
 pub struct MonteCarloTree {
     c_puct: f32,
-    root: RwLock<Arc<AtomicCell<Receiver<TreeNode>>>>,
+    root: RwLock<Arc<(MpmcSender<TreeNode>, MpmcReceiver<TreeNode>)>>,
 }
 
 impl MonteCarloTree {
@@ -375,7 +372,7 @@ impl MonteCarloTree {
 
                 // Evaluate the leaf using a network
                 predict_fn(promise);
-                let (prob_matrix, score) = rx.await?;
+                let (prob_matrix, score) = rx.await.expect("Unable to predict");
 
                 // black and white are placed in turns
                 // if `node` is a black move, then `score` is an evaluation from white's perspective.
