@@ -21,7 +21,7 @@ use selfplay::Trainer;
 
 static ABOUT_TEXT: &str = "Renju game ";
 
-static PRODUCE_MATCH_HELP_TEXT: &str = "
+static SELF_PLAY_MATCH_HELP_TEXT: &str = "
 Produce matches by self-play
 ";
 
@@ -40,11 +40,10 @@ struct Arguments {
 #[derive(Subcommand, Debug)]
 enum Verb {
     /// Producing matches
-    #[clap(after_help=PRODUCE_MATCH_HELP_TEXT)]
-    Produce {
-        /// tcp endpoint to connect to report results. e.g. tcp://127.0.0.1:2222
+    #[clap(after_help=SELF_PLAY_MATCH_HELP_TEXT)]
+    SelfPlay {
         #[clap(required = true)]
-        address: String,
+        export_dir: String,
     },
 
     /// Self play and train
@@ -69,6 +68,12 @@ async fn main() {
     let args = Arguments::parse();
 
     match args.verb {
+        Some(Verb::SelfPlay { export_dir }) => {
+            let mut trainer = Trainer::new();
+
+            //trainer.self_play(&export_dir).await;
+        }
+
         Some(Verb::Train {}) => {
             let mut trainer = Trainer::new();
             trainer.run().await;

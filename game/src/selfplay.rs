@@ -1,11 +1,15 @@
 use bytemuck::cast_slice;
 
 use ndarray::Array;
+
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
+use std::fs;
+use std::path::Path;
 use std::time::Instant;
+
 use tokio::fs::OpenOptions;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use futures::future::OptionFuture;
 use rand::distributions::WeightedIndex;
@@ -17,7 +21,7 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use crate::game::*;
 use crate::mcts::{MonteCarloTree, PredictionPromise};
-use crate::model::PolicyValueModel;
+use crate::model::{PolicyValueModel, TfLiteModel};
 
 pub struct Trainer {
     parallel_num: u32, // parallel self-play matches for a single open pattern
@@ -41,7 +45,7 @@ impl Trainer {
     pub fn new() -> Self {
         Self {
             batch_size: 500,
-            parallel_num: 10, // parallel self-play matches for a single open pattern
+            parallel_num: 5, // parallel self-play matches for a single open pattern
             mcts_c_puct: 5f32,
             mcts_iterations: 400,
             epochs: 5,
@@ -51,40 +55,43 @@ impl Trainer {
         }
     }
 
+    pub async fn produce_self_play_data(self: &mut Self, model_file: &str, export_dir: &str) {
+        let mut model = TfLiteModel::load(model_file).expect("Unable to load tflite model");
+        let (handles, predict_rx) = self.start_groups();
+
+        // handle predictions and wait all complection
+        model = self.handle_prediction(model, predict_rx).await;
+
+        // collect data
+        let mut match_outputs: Vec<Vec<(StateTensor, SquareMatrix, f32)>> =
+            Vec::with_capacity(1000);
+        for handle in handles {
+            let mut vectors: Vec<Vec<(StateTensor, SquareMatrix, f32)>> =
+                handle.await.expect("Error in TrainGroup");
+            match_outputs.append(&mut vectors);
+        }
+        println!("Total matches = {}.", match_outputs.len());
+
+        self.export_data_set(match_outputs, Path::new(export_dir))
+            .await;
+    }
+
     pub async fn run(self: &mut Self) {
-        let mut option = Some(PolicyValueModel::get_latest());
+        let training_model = PolicyValueModel::get_latest();
+        let mut dir = std::env::current_exe().expect("env::current_exe() failed");
+        dir.pop();
+        let model_file = Path::join(&dir, "training.tflite").display().to_string();
+        _ = fs::remove_file(&model_file);
         loop {
-            assert!(option.is_some());
+            training_model
+                .save_quantized_model(&model_file)
+                .expect("save_quantized_model() failed");
 
-            let now = Instant::now();
-            let (handles, predict_rx) = self.start_groups();
+            let export_dir = Path::join(&dir, "data").display().to_string();
+            _ = std::fs::create_dir_all(&export_dir);
+            self.produce_self_play_data(&model_file, &export_dir).await;
 
-            // handle predictions and wait all complection
-            let mut model = option.take().unwrap();
-            model = self.handle_prediction(model, predict_rx).await;
-
-            // collect data
-            let mut match_outputs: Vec<Vec<(StateTensor, SquareMatrix, f32)>> =
-                Vec::with_capacity(1000);
-            for handle in handles {
-                let mut vectors: Vec<Vec<(StateTensor, SquareMatrix, f32)>> =
-                    handle.await.expect("Error in TrainGroup");
-                match_outputs.append(&mut vectors);
-            }
-            println!(
-                "Total matches = {}. {}s",
-                match_outputs.len(),
-                now.elapsed().as_secs()
-            );
-
-            let data_sets = self.collect_data_set(match_outputs);
-            println!(
-                "{} batches. each size is {}",
-                data_sets.len(),
-                self.batch_size
-            );
-
-            option = Some(self.train(model, data_sets).await);
+            self.train(&training_model, &export_dir).await;
         }
     }
 
@@ -142,9 +149,9 @@ impl Trainer {
     }
 
     fn predict_batch(
-        model: PolicyValueModel,
+        model: TfLiteModel,
         promises: Vec<PredictionPromise>,
-    ) -> JoinHandle<PolicyValueModel> {
+    ) -> JoinHandle<TfLiteModel> {
         let state_tensor_batch: Vec<StateTensor> = promises
             .iter()
             .map(|promise| promise.get_state_tensor().clone())
@@ -167,20 +174,22 @@ impl Trainer {
             /*
             tokio::task::spawn_blocking(move || {
                 println!(
-                    "avg {:.2} ms batch size {}",
-                    batch_size as f32 / elapsed as f32,
+                    "avg {:.2} ms. {} / {}",
+                    elapsed as f32 / batch_size as f32,
+                    elapsed,
                     batch_size,
                 );
-            }); */
+            });
+             */
             model
         })
     }
 
     async fn handle_prediction(
         self: &Self,
-        m: PolicyValueModel,
+        m: TfLiteModel,
         mut predict_rx: UnboundedReceiver<PredictionPromise>,
-    ) -> PolicyValueModel {
+    ) -> TfLiteModel {
         let mut promises = Some(Vec::with_capacity(1000));
 
         let mut model = Some(m);
@@ -234,13 +243,14 @@ impl Trainer {
         model.unwrap()
     }
 
-    fn collect_data_set(
+    async fn export_data_set(
         self: &Self,
         mut matches: Vec<Vec<(StateTensor, SquareMatrix, f32)>>,
-    ) -> Vec<DataSet> {
-        // store data set into temp files
-        let mut data_sets = Vec::with_capacity(1000);
+        parent_dir: &Path,
+    ) {
+        // store data set into files
 
+        let mut batch_id = 0;
         while !matches.is_empty() {
             let mut state_tensor_batch = Vec::with_capacity(self.batch_size);
             let mut prob_matrix_batch = Vec::with_capacity(self.batch_size);
@@ -277,17 +287,61 @@ impl Trainer {
                 data_set.score_batch.len()
             );
 
-            data_sets.push(data_set);
+            let serialized = serde_pickle::to_vec(&data_set, Default::default()).unwrap();
+
+            batch_id += 1;
+            let filepath = parent_dir.join(format!("{}.pickle", batch_id));
+            let mut file = OpenOptions::new()
+                .read(false)
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&filepath)
+                .await
+                .expect("Unable to open file for writting");
+            file.write_all(&serialized)
+                .await
+                .expect("Unable to write file");
         }
-        data_sets
     }
 
-    async fn train(
-        self: &mut Self,
-        model: PolicyValueModel,
-        data_sets: Vec<DataSet>,
-    ) -> PolicyValueModel {
-        for (index, data_set) in data_sets.iter().enumerate() {
+    async fn train(self: &mut Self, model: &PolicyValueModel, data_dir: &str) {
+        let paths = fs::read_dir(data_dir).expect("Unable to read dir");
+
+        for (index, result) in paths.enumerate() {
+            let data_set: DataSet = match result {
+                Err(_) => continue,
+                Ok(entry) => {
+                    if let Some(name) = entry.file_name().to_str() {
+                        let filename = Path::join(Path::new(data_dir), name);
+                        let mut file = OpenOptions::new()
+                            .read(true)
+                            .write(false)
+                            .create(false)
+                            .truncate(false)
+                            .open(&filename)
+                            .await
+                            .expect("Unable to open file for reading");
+
+                        let metadata = fs::metadata(&filename).expect("unable to read metadata");
+                        let mut buffer = Vec::with_capacity(metadata.len() as usize);
+                        let read = file
+                            .read_to_end(&mut buffer)
+                            .await
+                            .expect("buffer overflow");
+                        assert_eq!(read as u64, metadata.len());
+                        drop(file);
+                        _ = fs::remove_file(&filename);
+                        match serde_pickle::from_slice(&buffer, Default::default()) {
+                            Ok(x) => x,
+                            Err(_) => continue,
+                        }
+                    } else {
+                        continue;
+                    }
+                }
+            };
+
             let now = Instant::now();
             let (old_log_prob_matrix, _old_value) = model
                 .predict(&[data_set.state_tensor_batch[0].clone()], true)
@@ -331,9 +385,8 @@ impl Trainer {
             let elapsed = now.elapsed();
 
             println!(
-                "{}/{} lr={}; loss={}; entropy={}; kl={}; elapsed={:.2?}",
+                "{} lr={}; loss={}; entropy={}; kl={}; elapsed={:.2?}",
                 index + 1,
-                data_sets.len(),
                 self.learn_rate * self.lr_multiplier,
                 loss,
                 entropy,
@@ -364,7 +417,6 @@ impl Trainer {
                     .expect("Unable to write file");
             }
         }
-        model
     }
 }
 
@@ -559,6 +611,7 @@ impl SelfPlayer {
 
     fn choose_with_dirichlet_noice(probabilities: &Vec<f32>, noise_percentage: f32) -> usize {
         assert!(probabilities.len() > 1);
+        assert!(!probabilities[0].is_nan());
         let concentration = vec![0.3f32; probabilities.len()];
         let dirichlet = Dirichlet::new(&concentration).unwrap();
         let samples = dirichlet.sample(&mut rand::thread_rng());
@@ -644,6 +697,7 @@ impl SelfPlayer {
         move_prob_pairs
             .iter()
             .for_each(|((row, col), probability)| {
+                assert!(!probability.is_nan());
                 mcts_prob_matrix[*row][*col] = *probability;
             });
 

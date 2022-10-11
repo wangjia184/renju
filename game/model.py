@@ -319,17 +319,48 @@ def save_model(folder_name):
                 'predict': renju.predict.get_concrete_function()
             })
 
+
+def save_quantized_model(file_name):
+    with open("sample_input.pickle", "rb") as input_file:
+        fileContent = input_file.read()
+        state_tensor_batch = to_list(pickle.loads(fileContent)['state_tensor_batch'])
+
+    # You need to provide either a dictionary with input names and values, a tuple with signature key and a dictionary with input names and values, 
+    # or an array with input values in the order of input tensors of the graph in the representative_dataset function. 
+    def representative_data_gen():
+        for input_value in state_tensor_batch:
+            yield [tf.convert_to_tensor([input_value])]
+
+    converter = tf.lite.TFLiteConverter.from_keras_model(renju.model)
+    converter.optimizations = [tf.lite.Optimize.DEFAULT]
+    converter.target_spec.supported_types = [tf.float16]
+    
+    # https://www.tensorflow.org/lite/performance/post_training_integer_quant
+    # converter.representative_dataset = representative_data_gen
+
+    # https://www.tensorflow.org/lite/performance/post_training_integer_quant_16x8
+    # converter.target_spec.supported_ops = [tf.lite.OpsSet.EXPERIMENTAL_TFLITE_BUILTINS_ACTIVATIONS_INT16_WEIGHTS_INT8]
+    
+    tflite_model = converter.convert()
+
+    tflite_models_dir = pathlib.Path("./")
+    tflite_models_dir.mkdir(exist_ok=True, parents=True)
+    # Save the quantized model:
+    tflite_model_quant_file = tflite_models_dir/file_name
+    tflite_model_quant_file.write_bytes(tflite_model)
+
+def to_list(x):
+    ls = list(x)
+    for idx, sub in enumerate(ls):
+        if type(sub) == tuple:
+            ls[idx] = to_list(sub)
+    return ls
+
 with open("latest.weights", mode='rb') as file:
     buffer = file.read()
     import_parameters(buffer)
-#save_model('saved_model/20221010')
+#save_model('saved_model/20221012')
+#save_quantized_model('best.tflite')
 
-converter = tf.lite.TFLiteConverter.from_keras_model(renju.model)
-converter.optimizations = [tf.lite.Optimize.DEFAULT]
-tflite_model = converter.convert()
 
-tflite_models_dir = pathlib.Path("./tflite_model/")
-tflite_models_dir.mkdir(exist_ok=True, parents=True)
-# Save the quantized model:
-tflite_model_quant_file = tflite_models_dir/"xx.tflite"
-tflite_model_quant_file.write_bytes(tflite_model)
+    

@@ -441,6 +441,7 @@ impl MonteCarloTree {
     ) -> Result<Vec<((usize, usize) /*pos*/, f32 /* probability */)>, RecvError> {
         let mut pairs = Vec::with_capacity(50);
         let mut max_log_visit_times = 0f32;
+        let mut total_visit_times = 0;
         // calc the move probabilities based on visit counts in top level
         let root = self.root.read().await.clone();
         TreeNode::enumerate_children(&root, |pos, child| {
@@ -449,9 +450,12 @@ impl MonteCarloTree {
             if log_visit_times > max_log_visit_times {
                 max_log_visit_times = log_visit_times;
             }
+            total_visit_times += child.visit_times;
             pairs.push((*pos, log_visit_times));
         })
         .await?;
+
+        assert_ne!(total_visit_times, 0);
 
         // softmax
         let mut sum = 0f32;

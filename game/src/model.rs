@@ -1,5 +1,6 @@
 use bytemuck::cast_slice;
 use bytes::Bytes;
+use num_cpus;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList, PyTuple};
 use std::fs::OpenOptions;
@@ -17,6 +18,9 @@ use tensorflow::SessionRunArgs;
 use tensorflow::Tensor;
 
 use tensorflow::Status;
+
+use tflitec::interpreter::{Interpreter, Options};
+use tflitec::tensor;
 
 use crate::game::*;
 
@@ -192,12 +196,28 @@ impl PolicyValueModel {
     }
 
     pub fn import(self: &Self, buffer: Bytes) -> PyResult<()> {
+        pyo3::prepare_freethreaded_python();
         Python::with_gil(|py| {
             let import_fn: Py<PyAny> = self.module.as_ref(py).getattr("import_parameters")?.into();
 
             let bytes = PyBytes::new(py, &buffer);
             let args = PyTuple::new(py, &[bytes]);
             import_fn.call1(py, args)?;
+            Ok(())
+        })
+    }
+
+    pub fn save_quantized_model(self: &Self, file_path: &str) -> PyResult<()> {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let save_fn: Py<PyAny> = self
+                .module
+                .as_ref(py)
+                .getattr("save_quantized_model")?
+                .into();
+
+            let args = PyTuple::new(py, &[file_path]);
+            save_fn.call1(py, args)?;
             Ok(())
         })
     }
@@ -290,5 +310,82 @@ impl OnDeviceModel {
         });
 
         Ok((matrix, value_tensor[0]))
+    }
+}
+
+pub struct TfLiteModel {
+    interpreter: Interpreter,
+}
+
+impl TfLiteModel {
+    pub fn load(tflite_model_path: &str) -> Result<Self, tflitec::Error> {
+        // Create interpreter options
+        let mut options = Options::default();
+        options.thread_count = num_cpus::get() as i32 / 2;
+        options.is_xnnpack_enabled = true;
+        println!("is_xnnpack_enabled={}", options.is_xnnpack_enabled);
+
+        let interpreter = Interpreter::with_model_path(tflite_model_path, Some(options))?;
+
+        Ok(TfLiteModel {
+            interpreter: interpreter,
+        })
+    }
+
+    pub fn predict_batch(
+        self: &Self,
+        state_tensors: Vec<StateTensor>,
+    ) -> Result<Vec<(SquareMatrix<f32>, f32)>, tflitec::Error> {
+        assert!(!state_tensors.is_empty());
+
+        // Resize input
+        let input_shape = tensor::Shape::new(vec![state_tensors.len(), 4, BOARD_SIZE, BOARD_SIZE]);
+        self.interpreter.resize_input(0, input_shape)?;
+        self.interpreter.allocate_tensors()?;
+
+        let input_tensor = self.interpreter.input(0)?;
+        assert_eq!(input_tensor.data_type(), tensor::DataType::Float32);
+
+        assert!(input_tensor.set_data(&state_tensors[..]).is_ok());
+
+        // Invoke interpreter
+        assert!(self.interpreter.invoke().is_ok());
+
+        // Get output tensor
+        let prob_matrix_tensor = self.interpreter.output(0)?;
+        let score_tensor = self.interpreter.output(1)?;
+
+        assert_eq!(
+            prob_matrix_tensor.shape().dimensions(),
+            &vec![
+                state_tensors.len(),
+                BOARD_SIZE as usize * BOARD_SIZE as usize
+            ]
+        );
+
+        assert_eq!(
+            score_tensor.shape().dimensions(),
+            &vec![state_tensors.len(), 1usize]
+        );
+
+        let mut vector = Vec::new();
+
+        let prob_matrix_data = prob_matrix_tensor.data::<f32>().to_vec();
+        let score_data = score_tensor.data::<f32>().to_vec();
+
+        for batch_index in 0..state_tensors.len() {
+            let mut prob_matrix = SquareMatrix::default();
+
+            for index in 0..BOARD_SIZE * BOARD_SIZE {
+                let prob = prob_matrix_data[batch_index * BOARD_SIZE * BOARD_SIZE + index];
+                prob_matrix[index / BOARD_SIZE][index % BOARD_SIZE] = prob;
+            }
+
+            let score = score_data[batch_index];
+
+            vector.push((prob_matrix, score));
+        }
+
+        Ok(vector)
     }
 }
