@@ -327,26 +327,24 @@ impl TfLiteModel {
 
         let interpreter = Interpreter::with_model_path(tflite_model_path, Some(options))?;
 
+        // Resize input
+        let input_shape = tensor::Shape::new(vec![1, 4, BOARD_SIZE, BOARD_SIZE]);
+        interpreter.resize_input(0, input_shape)?;
+        interpreter.allocate_tensors()?;
+
         Ok(TfLiteModel {
             interpreter: interpreter,
         })
     }
 
-    pub fn predict_batch(
+    pub fn predict_one(
         self: &Self,
-        state_tensors: Vec<StateTensor>,
-    ) -> Result<Vec<(SquareMatrix<f32>, f32)>, tflitec::Error> {
-        assert!(!state_tensors.is_empty());
-
-        // Resize input
-        let input_shape = tensor::Shape::new(vec![state_tensors.len(), 4, BOARD_SIZE, BOARD_SIZE]);
-        self.interpreter.resize_input(0, input_shape)?;
-        self.interpreter.allocate_tensors()?;
-
+        state_tensor: StateTensor,
+    ) -> Result<(SquareMatrix<f32>, f32), tflitec::Error> {
         let input_tensor = self.interpreter.input(0)?;
         assert_eq!(input_tensor.data_type(), tensor::DataType::Float32);
 
-        assert!(input_tensor.set_data(&state_tensors[..]).is_ok());
+        assert!(input_tensor.set_data(&state_tensor).is_ok());
 
         // Invoke interpreter
         assert!(self.interpreter.invoke().is_ok());
@@ -357,35 +355,24 @@ impl TfLiteModel {
 
         assert_eq!(
             prob_matrix_tensor.shape().dimensions(),
-            &vec![
-                state_tensors.len(),
-                BOARD_SIZE as usize * BOARD_SIZE as usize
-            ]
+            &vec![1, BOARD_SIZE as usize * BOARD_SIZE as usize]
         );
 
-        assert_eq!(
-            score_tensor.shape().dimensions(),
-            &vec![state_tensors.len(), 1usize]
-        );
-
-        let mut vector = Vec::new();
+        assert_eq!(score_tensor.shape().dimensions(), &vec![1, 1]);
 
         let prob_matrix_data = prob_matrix_tensor.data::<f32>().to_vec();
         let score_data = score_tensor.data::<f32>().to_vec();
 
-        for batch_index in 0..state_tensors.len() {
-            let mut prob_matrix = SquareMatrix::default();
+        let mut prob_matrix: SquareMatrix = SquareMatrix::default();
 
-            for index in 0..BOARD_SIZE * BOARD_SIZE {
-                let prob = prob_matrix_data[batch_index * BOARD_SIZE * BOARD_SIZE + index];
-                prob_matrix[index / BOARD_SIZE][index % BOARD_SIZE] = prob;
-            }
-
-            let score = score_data[batch_index];
-
-            vector.push((prob_matrix, score));
+        for row in 0..BOARD_SIZE {
+            prob_matrix[row] = prob_matrix_data[row * BOARD_SIZE..(row + 1) * BOARD_SIZE]
+                .try_into()
+                .unwrap();
         }
 
-        Ok(vector)
+        let score = score_data[0];
+
+        Ok((prob_matrix, score))
     }
 }

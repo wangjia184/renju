@@ -360,7 +360,7 @@ with open("latest.weights", mode='rb') as file:
     buffer = file.read()
     import_parameters(buffer)
 #save_model('saved_model/20221012')
-save_quantized_model('best.tflite')
+#save_quantized_model('best.tflite')
 
 
     

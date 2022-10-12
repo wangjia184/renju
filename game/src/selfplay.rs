@@ -2,26 +2,28 @@ use bytemuck::cast_slice;
 
 use ndarray::Array;
 
-use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
-use std::fs;
-use std::path::Path;
-use std::time::Instant;
-
-use tokio::fs::OpenOptions;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-use futures::future::OptionFuture;
 use rand::distributions::WeightedIndex;
 use rand::prelude::*;
 use rand_distr::Dirichlet;
+use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
+use std::cell::RefCell;
+use std::fs;
+use std::path::Path;
+use std::sync::Mutex;
+use std::time::Instant;
+use tokio::fs::OpenOptions;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::process::{Child, Command};
 use tokio::task::JoinHandle;
 
-use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-
 use crate::game::*;
-use crate::mcts::{MonteCarloTree, PredictionPromise};
+use crate::mcts::MonteCarloTree;
 use crate::model::{PolicyValueModel, TfLiteModel};
+
+// each thread creates a dedicated model
+thread_local!(static MODEL: RefCell<Option<TfLiteModel>> = RefCell::new(None));
+static MODEL_FILE: Mutex<String> = Mutex::new(String::new());
 
 pub struct Trainer {
     parallel_num: u32, // parallel self-play matches for a single open pattern
@@ -45,35 +47,14 @@ impl Trainer {
     pub fn new() -> Self {
         Self {
             batch_size: 500,
-            parallel_num: 5, // parallel self-play matches for a single open pattern
-            mcts_c_puct: 5f32,
+            parallel_num: 1, // parallel self-play matches for a single open pattern
+            mcts_c_puct: 1f32,
             mcts_iterations: 400,
             epochs: 5,
             learn_rate: 1e-3,
             lr_multiplier: 1f32,
             kl_targ: 0.02f32,
         }
-    }
-
-    pub async fn produce_self_play_data(self: &mut Self, model_file: &str, export_dir: &str) {
-        let mut model = TfLiteModel::load(model_file).expect("Unable to load tflite model");
-        let (handles, predict_rx) = self.start_groups();
-
-        // handle predictions and wait all complection
-        model = self.handle_prediction(model, predict_rx).await;
-
-        // collect data
-        let mut match_outputs: Vec<Vec<(StateTensor, SquareMatrix, f32)>> =
-            Vec::with_capacity(1000);
-        for handle in handles {
-            let mut vectors: Vec<Vec<(StateTensor, SquareMatrix, f32)>> =
-                handle.await.expect("Error in TrainGroup");
-            match_outputs.append(&mut vectors);
-        }
-        println!("Total matches = {}.", match_outputs.len());
-
-        self.export_data_set(match_outputs, Path::new(export_dir))
-            .await;
     }
 
     pub async fn run(self: &mut Self) {
@@ -89,22 +70,69 @@ impl Trainer {
 
             let export_dir = Path::join(&dir, "data").display().to_string();
             _ = std::fs::create_dir_all(&export_dir);
-            self.produce_self_play_data(&model_file, &export_dir).await;
 
+            let now = Instant::now();
+
+            let mut child = Self::start_child_process(vec!["self-play", &model_file, &export_dir])
+                .expect("Unable to start child process");
+            child
+                .wait()
+                .await
+                .expect("Child process does not exit normally");
+
+            let self_play_elapsed = now.elapsed();
+            println!("Self play took {}s", self_play_elapsed.as_secs());
+
+            let now = Instant::now();
             self.train(&training_model, &export_dir).await;
+            let train_elapsed = now.elapsed();
+            println!(
+                "Self play took {}s; Train took {}s",
+                self_play_elapsed.as_secs(),
+                train_elapsed.as_secs()
+            );
         }
     }
 
-    fn start_groups(
-        self: &Self,
-    ) -> (
-        Vec<JoinHandle<Vec<Vec<(StateTensor, SquareMatrix, f32)>>>>,
-        UnboundedReceiver<PredictionPromise>,
-    ) {
+    fn start_child_process(parameters: Vec<&str>) -> std::io::Result<Child> {
+        let path = std::env::current_exe()?;
+        let app_path = path.display().to_string();
+        println!("{} {}", app_path, parameters.join(" "));
+        let child = Command::new(&app_path)
+            .args(parameters)
+            //.stdin(Stdio::piped())
+            //.stdout(Stdio::piped())
+            //.stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()?;
+
+        let _pid = child.id().expect("child did not have a id");
+
+        Ok(child)
+    }
+
+    pub async fn produce_self_play_data(self: &mut Self, model_file: &str, export_dir: &str) {
+        *MODEL_FILE.lock().unwrap() = model_file.to_string();
+
+        let handles = self.start_groups();
+
+        // collect data
+        let mut match_outputs: Vec<Vec<(StateTensor, SquareMatrix, f32)>> =
+            Vec::with_capacity(1000);
+        for handle in handles {
+            let mut vectors: Vec<Vec<(StateTensor, SquareMatrix, f32)>> =
+                handle.await.expect("Error in TrainGroup");
+            match_outputs.append(&mut vectors);
+        }
+        println!("Total matches = {}.", match_outputs.len());
+
+        self.export_data_set(match_outputs, Path::new(export_dir))
+            .await;
+    }
+
+    fn start_groups(self: &Self) -> Vec<JoinHandle<Vec<Vec<(StateTensor, SquareMatrix, f32)>>>> {
         // https://www.wuziqi123.com/jiangzuo/dingshiyanjiu/156.html
         // for each open pattern, start a group
-
-        let (predict_tx, predict_rx) = mpsc::unbounded_channel();
 
         let mut handles = Vec::with_capacity(100);
 
@@ -133,114 +161,13 @@ impl Trainer {
         }
 
         for open_pattern in open_patterns {
-            let cloned_tx = predict_tx.clone();
-            let group = SelfPlayGroup::new(
-                open_pattern,
-                self.mcts_c_puct,
-                self.mcts_iterations,
-                cloned_tx,
-            );
+            let group = SelfPlayGroup::new(open_pattern, self.mcts_c_puct, self.mcts_iterations);
             let parallel_num = self.parallel_num;
             let handle = tokio::spawn(async move { group.run(parallel_num).await });
             handles.push(handle);
         }
 
-        (handles, predict_rx)
-    }
-
-    fn predict_batch(
-        model: TfLiteModel,
-        promises: Vec<PredictionPromise>,
-    ) -> JoinHandle<TfLiteModel> {
-        let state_tensor_batch: Vec<StateTensor> = promises
-            .iter()
-            .map(|promise| promise.get_state_tensor().clone())
-            .collect();
-
-        tokio::task::spawn_blocking(move || {
-            //let now = Instant::now();
-
-            let pairs = model
-                .predict_batch(state_tensor_batch)
-                .expect("Unable to predict batch");
-
-            //let elapsed = now.elapsed().as_millis();
-            //let batch_size = promises.len();
-
-            promises
-                .into_iter()
-                .enumerate()
-                .for_each(|(index, promise)| promise.resolve(pairs[index].0, pairs[index].1));
-            /*
-            tokio::task::spawn_blocking(move || {
-                println!(
-                    "avg {:.2} ms. {} / {}",
-                    elapsed as f32 / batch_size as f32,
-                    elapsed,
-                    batch_size,
-                );
-            });
-             */
-            model
-        })
-    }
-
-    async fn handle_prediction(
-        self: &Self,
-        m: TfLiteModel,
-        mut predict_rx: UnboundedReceiver<PredictionPromise>,
-    ) -> TfLiteModel {
-        let mut promises = Some(Vec::with_capacity(1000));
-
-        let mut model = Some(m);
-        let mut join_handle: OptionFuture<_> = None.into();
-
-        let mut channel_disconnected = false;
-        while !channel_disconnected || !promises.as_ref().unwrap().is_empty() || model.is_none() {
-            tokio::select! {
-                //biased; //  branches are picked in order of code
-
-                option = &mut join_handle => {
-                    if let Some(result) = option {
-                        match result {
-                            Ok(returned_model) => {
-                                model = Some(returned_model);
-                                join_handle = if !promises.as_ref().unwrap().is_empty() {
-                                    Some(Self::predict_batch( model.take().unwrap(), promises.replace(Vec::with_capacity(1000)).unwrap())).into()
-                                } else {
-                                    None.into()
-                                };
-                            },
-                            Err(e) => {
-                                panic!("Unable to predict batch {}", e);
-                            }
-                        }
-
-                    }
-                }
-
-                result = predict_rx.recv() => {
-                    match result {
-                        Some(promise) => {
-                            assert!(promises.is_some());
-
-                            promises.as_mut().unwrap().push(promise);
-                            if model.is_some() { // if model is taken, there is already a predction running
-                                join_handle = Some(Self::predict_batch( model.take().unwrap(), promises.replace(Vec::with_capacity(1000)).unwrap())).into();
-                            }
-                        }
-                        None => {
-                            // completed
-                            channel_disconnected = true;
-                        }
-                    }
-                },
-
-
-            };
-        }
-
-        model.unwrap()
+        handles
     }
 
     async fn export_data_set(
@@ -308,7 +235,6 @@ impl Trainer {
     async fn train(self: &mut Self, model: &PolicyValueModel, data_dir: &str) {
         let paths = fs::read_dir(data_dir).expect("Unable to read dir");
 
-        let mut skip = true;
         for (index, result) in paths.enumerate() {
             let data_set: DataSet = match result {
                 Err(_) => continue,
@@ -342,11 +268,6 @@ impl Trainer {
                     }
                 }
             };
-
-            skip = !skip;
-            if skip {
-                continue; // skip half randomly
-            }
 
             let now = Instant::now();
             let (old_log_prob_matrix, _old_value) = model
@@ -431,33 +352,22 @@ struct SelfPlayGroup {
     open_pattern: [(usize, usize); 3],
     mcts_c_puct: f32,
     mcts_iterations: usize,
-    predict_tx: UnboundedSender<PredictionPromise>,
 }
 
 impl SelfPlayGroup {
-    fn new(
-        open_pattern: [(usize, usize); 3],
-        mcts_c_puct: f32,
-        mcts_iterations: usize,
-        predict_tx: UnboundedSender<PredictionPromise>,
-    ) -> Self {
+    fn new(open_pattern: [(usize, usize); 3], mcts_c_puct: f32, mcts_iterations: usize) -> Self {
         Self {
             open_pattern: open_pattern,
             mcts_c_puct: mcts_c_puct,
             mcts_iterations: mcts_iterations,
-            predict_tx: predict_tx,
         }
     }
 
     async fn run(self: &Self, parallel_num: u32) -> Vec<Vec<(StateTensor, SquareMatrix, f32)>> {
         let mut handles = Vec::with_capacity(parallel_num as usize);
         for _ in 0..parallel_num {
-            let worker = SelfPlayMatch::new(
-                self.open_pattern,
-                self.mcts_c_puct,
-                self.mcts_iterations,
-                self.predict_tx.clone(),
-            );
+            let worker =
+                SelfPlayMatch::new(self.open_pattern, self.mcts_c_puct, self.mcts_iterations);
             let handle = tokio::spawn(async move { worker.run().await });
             handles.push(handle);
         }
@@ -484,11 +394,10 @@ impl SelfPlayMatch {
         open_pattern: [(usize, usize); 3],
         mcts_c_puct: f32,
         mcts_iterations: usize,
-        predict_tx: UnboundedSender<PredictionPromise>,
     ) -> Self {
         Self {
             board: RenjuBoard::default(),
-            self_player: SelfPlayer::new(mcts_c_puct, predict_tx),
+            self_player: SelfPlayer::new(mcts_c_puct),
             open_pattern: open_pattern,
             black_pairs: Vec::with_capacity(50),
             white_pairs: Vec::with_capacity(50),
@@ -598,20 +507,18 @@ impl SelfPlayMatch {
 // play with self to produce training data
 pub struct SelfPlayer {
     tree: MonteCarloTree,
-    sender: UnboundedSender<PredictionPromise>,
     // temperature parameter in (0, 1] controls the level of exploration
     temperature: f32,
     mcts_c_puct: f32,
 }
 
 impl SelfPlayer {
-    pub fn new(mcts_c_puct: f32, sender: UnboundedSender<PredictionPromise>) -> Self {
+    pub fn new(mcts_c_puct: f32) -> Self {
         let tree = MonteCarloTree::new(mcts_c_puct);
         Self {
             tree: tree,
             mcts_c_puct: mcts_c_puct,
             temperature: 1e-3,
-            sender: sender,
         }
     }
 
@@ -681,10 +588,21 @@ impl SelfPlayer {
     ) -> ((usize, usize), SquareMatrix) {
         for _ in 0..iterations {
             self.tree
-                .rollout(board.clone(), choices, |promise| {
-                    if let Err(_) = self.sender.send(promise) {
-                        panic!("Unable to send")
-                    }
+                .rollout(board.clone(), choices, |state_tensor: StateTensor| {
+                    MODEL.with(|ref_cell| {
+                        let mut model = ref_cell.borrow_mut();
+                        if model.is_none() {
+                            let m = TfLiteModel::load(&MODEL_FILE.lock().unwrap())
+                                .expect("Unable to load tflite model");
+                            *model = Some(m);
+                        }
+
+                        model
+                            .as_ref()
+                            .unwrap()
+                            .predict_one(state_tensor)
+                            .expect("Unable to predict_one")
+                    })
                 })
                 .await
                 .expect("rollout failed");

@@ -216,6 +216,9 @@ impl TreeNode {
         // with the degree of exploration being controlled by the hyper-parameter ‘c’.
         // Effectively this part of the equation provides a measure of the uncertainty for the action’s reward estimate.
         // u = visit-count-adjusted prior score
+        if self.visit_times == 0 {
+            return f32::MAX;
+        }
         let u = c_puct
             * self.probability
             * f32::sqrt(parent_visit_times as f32 + self.unobserved_times as f32)
@@ -281,38 +284,6 @@ impl TreeNode {
     }
 }
 
-// A promise object to be resolved when prediction is done
-pub struct PredictionPromise {
-    state_tensor: StateTensor,
-    replier: Option<Sender<(SquareMatrix, f32)>>,
-}
-impl Drop for PredictionPromise {
-    fn drop(&mut self) {
-        assert!(self.replier.is_none()); //the promise must be resolved before drop
-    }
-}
-impl PredictionPromise {
-    fn new(state_tensor: StateTensor) -> (Self, Receiver<(SquareMatrix, f32)>) {
-        let (tx, rx) = oneshot::channel();
-        (
-            Self {
-                state_tensor: state_tensor,
-                replier: Some(tx),
-            },
-            rx,
-        )
-    }
-    pub fn get_state_tensor(self: &Self) -> &StateTensor {
-        &self.state_tensor
-    }
-    pub fn resolve(mut self: Self, prob_matrix: SquareMatrix, score: f32) {
-        assert!(self.replier.is_some());
-        if let Err(_) = self.replier.take().unwrap().send((prob_matrix, score)) {
-            panic!("Unable to resolve prediction promise");
-        }
-    }
-}
-
 // Monte Carlo tree search
 pub struct MonteCarloTree {
     c_puct: f32,
@@ -341,7 +312,7 @@ impl MonteCarloTree {
         mut predict_fn: F,
     ) -> Result<(), RecvError>
     where
-        F: FnMut(PredictionPromise),
+        F: FnMut(StateTensor) -> (SquareMatrix, f32),
     {
         let root = self.root.read().await.clone();
 
@@ -372,11 +343,8 @@ impl MonteCarloTree {
             TerminalState::AvailableMoves(choices) => {
                 assert!(!choices.is_empty());
 
-                let (promise, rx) = PredictionPromise::new(board.get_state_tensor());
-
                 // Evaluate the leaf using a network
-                predict_fn(promise);
-                let (prob_matrix, score) = rx.await?;
+                let (prob_matrix, score) = predict_fn(board.get_state_tensor());
 
                 // black and white are placed in turns
                 // if `node` is a black move, then `score` is an evaluation from white's perspective.

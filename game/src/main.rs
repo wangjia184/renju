@@ -43,6 +43,9 @@ enum Verb {
     #[clap(after_help=SELF_PLAY_MATCH_HELP_TEXT)]
     SelfPlay {
         #[clap(required = true)]
+        model_file: String,
+
+        #[clap(required = true)]
         export_dir: String,
     },
 
@@ -68,10 +71,15 @@ async fn main() {
     let args = Arguments::parse();
 
     match args.verb {
-        Some(Verb::SelfPlay { export_dir }) => {
+        Some(Verb::SelfPlay {
+            model_file,
+            export_dir,
+        }) => {
             let mut trainer = Trainer::new();
 
-            //trainer.self_play(&export_dir).await;
+            trainer
+                .produce_self_play_data(&model_file, &export_dir)
+                .await;
         }
 
         Some(Verb::Train {}) => {

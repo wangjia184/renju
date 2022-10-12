@@ -1,13 +1,15 @@
-use crate::game::{RenjuBoard, SquareMatrix, TerminalState};
+use crate::game::{RenjuBoard, SquareMatrix, StateTensor, TerminalState};
 
-use crate::mcts::{MonteCarloTree, PredictionPromise};
+use crate::mcts::MonteCarloTree;
 use crate::model::TfLiteModel;
 
 use crossbeam::atomic::AtomicCell;
 use std::sync::atomic::Ordering;
 use tokio::sync::RwLock;
 
-use std::sync::{atomic::AtomicBool, Arc, Mutex, Once};
+use std::cell::RefCell;
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
+use std::thread;
 use tokio::task::{self, JoinHandle};
 
 static SINGLETON: Mutex<Option<Arc<RwLock<HumanVsMachineMatch>>>> = Mutex::new(None);
@@ -239,20 +241,8 @@ impl HumanVsMachineMatch {
     }
 }
 
-static mut MODEL: Option<TfLiteModel> = None;
-static INIT: Once = Once::new();
-
-fn predict(promise: PredictionPromise) {
-    let model = unsafe {
-        INIT.call_once(|| {
-            MODEL = Some(TfLiteModel::load("best.tflite").expect("Unable to load saved model"));
-        });
-        MODEL.as_ref().unwrap()
-    };
-    let state_batch = vec![promise.get_state_tensor().clone()];
-    let (prob_matrix, score) = model.predict_batch(state_batch).expect("Unable to predict")[0];
-    promise.resolve(prob_matrix, score);
-}
+// each thread creates a dedicated model
+thread_local!(static MODEL: RefCell<Option<TfLiteModel>> = RefCell::new(None));
 
 pub struct AiPlayer {
     tree: MonteCarloTree,
@@ -276,8 +266,20 @@ impl AiPlayer {
 
     pub async fn think(self: &Self, board: RenjuBoard, choices: &Vec<(usize, usize)>) {
         self.tree
-            .rollout(board, choices, |promise| {
-                task::spawn_blocking(move || predict(promise));
+            .rollout(board, choices, |state_tensor: StateTensor| {
+                MODEL.with(|ref_cell| {
+                    let mut model = ref_cell.borrow_mut();
+                    if model.is_none() {
+                        *model = Some(
+                            TfLiteModel::load("best.tflite").expect("Unable to load saved model"),
+                        )
+                    }
+                    model
+                        .as_ref()
+                        .unwrap()
+                        .predict_one(state_tensor)
+                        .expect("Unable to predict_one")
+                })
             })
             .await
             .expect("rollout failed")
