@@ -1,7 +1,7 @@
 use crate::game::{RenjuBoard, SquareMatrix, TerminalState};
 
 use crate::mcts::{MonteCarloTree, PredictionPromise};
-use crate::model::OnDeviceModel;
+use crate::model::TfLiteModel;
 
 use crossbeam::atomic::AtomicCell;
 use std::sync::atomic::Ordering;
@@ -89,7 +89,7 @@ impl BoardInfo {
 impl HumanVsMachineMatch {
     pub async fn new(human_play_black: bool) -> Arc<RwLock<Self>> {
         let ai_player = AiPlayer::new();
-        let max_threads = (num_cpus::get() - 0).max(1);
+        let max_threads = 1; //(num_cpus::get() - 0).max(1);
         let instance = Arc::new(RwLock::new(Self {
             ai_player: Arc::new(ai_player),
             board: RenjuBoard::default(),
@@ -239,19 +239,18 @@ impl HumanVsMachineMatch {
     }
 }
 
-static mut MODEL: Option<OnDeviceModel> = None;
+static mut MODEL: Option<TfLiteModel> = None;
 static INIT: Once = Once::new();
 
 fn predict(promise: PredictionPromise) {
     let model = unsafe {
         INIT.call_once(|| {
-            MODEL =
-                Some(OnDeviceModel::load("renju_15x15_model").expect("Unable to load saved model"));
+            MODEL = Some(TfLiteModel::load("best.tflite").expect("Unable to load saved model"));
         });
         MODEL.as_ref().unwrap()
     };
     let state_batch = vec![promise.get_state_tensor().clone()];
-    let (prob_matrix, score) = model.predict(&state_batch).expect("Unable to predict");
+    let (prob_matrix, score) = model.predict_batch(state_batch).expect("Unable to predict")[0];
     promise.resolve(prob_matrix, score);
 }
 

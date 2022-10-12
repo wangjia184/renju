@@ -308,6 +308,7 @@ impl Trainer {
     async fn train(self: &mut Self, model: &PolicyValueModel, data_dir: &str) {
         let paths = fs::read_dir(data_dir).expect("Unable to read dir");
 
+        let mut skip = true;
         for (index, result) in paths.enumerate() {
             let data_set: DataSet = match result {
                 Err(_) => continue,
@@ -341,6 +342,11 @@ impl Trainer {
                     }
                 }
             };
+
+            skip = !skip;
+            if skip {
+                continue; // skip half randomly
+            }
 
             let now = Instant::now();
             let (old_log_prob_matrix, _old_value) = model

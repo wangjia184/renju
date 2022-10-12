@@ -224,6 +224,7 @@ impl TreeNode {
     }
 
     fn get_children(self: &Self) -> TreeNodeChildren {
+        assert!(!self.children.is_empty());
         let mut children = TreeNodeChildren {
             parent_visit_times: self.visit_times,
             pairs: self
