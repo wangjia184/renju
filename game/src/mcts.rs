@@ -99,7 +99,7 @@ impl TreeNodeChildren {
 
             let score = child_node
                 .get()
-                .compute_score(depth <= 3, c_puct, self.parent_visit_times);
+                .compute_score(depth <= 1, c_puct, self.parent_visit_times);
             if score > max_score {
                 max_score = score;
                 selected = Some(child_node);
