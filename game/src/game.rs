@@ -3,7 +3,7 @@ use std::collections::HashSet;
 
 pub const BOARD_SIZE: usize = 15;
 
-const DISTANCE: usize = 2;
+const DISTANCE: usize = 1;
 const NO_STONE: u8 = 0;
 const AVAILABLE: u8 = 1;
 
@@ -216,21 +216,6 @@ impl StoneScanResult {
 impl RenjuBoard {
     pub fn get_matrix(self: &Self) -> &SquareMatrix<u8> {
         &self.matrix
-    }
-
-    pub fn width(self: &Self) -> usize {
-        BOARD_SIZE
-    }
-    pub fn height(self: &Self) -> usize {
-        BOARD_SIZE
-    }
-    // clear board
-    pub fn clear(self: &mut Self) {
-        self.last_move = None;
-        self.matrix = SquareMatrix::default();
-        self.available_matrix = SquareMatrix::default();
-        self.available_matrix[BOARD_SIZE / 2][BOARD_SIZE / 2] = AVAILABLE;
-        self.stones = 0;
     }
 
     // next move is black?

@@ -4,7 +4,6 @@
 )]
 extern crate clap;
 extern crate num_cpus;
-extern crate tensorflow;
 
 use clap::{Parser, Subcommand};
 

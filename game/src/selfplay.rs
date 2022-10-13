@@ -52,7 +52,7 @@ impl Trainer {
             mcts_iterations: 400,
             epochs: 5,
             learn_rate: 1e-3,
-            lr_multiplier: 1f32,
+            lr_multiplier: 3f32,
             kl_targ: 0.02f32,
         }
     }
@@ -96,10 +96,13 @@ impl Trainer {
 
     fn start_child_process(parameters: Vec<&str>) -> std::io::Result<Child> {
         let path = std::env::current_exe()?;
+        let parent_directory = path.parent().unwrap().display().to_string();
         let app_path = path.display().to_string();
         println!("{} {}", app_path, parameters.join(" "));
         let child = Command::new(&app_path)
             .args(parameters)
+            .env("DYLD_LIBRARY_PATH", &parent_directory)
+            .env("LD_LIBRARY_PATH", &parent_directory)
             //.stdin(Stdio::piped())
             //.stdout(Stdio::piped())
             //.stderr(Stdio::piped())
@@ -561,9 +564,9 @@ impl SelfPlayer {
 
             // current move is not placed in board yet
             let noise_percentage = match board.get_stones() {
-                0..=4 => 0.6f32,
+                0..=4 => 0.3f32,
                 5..=15 => 0.25f32,
-                _ => 0.15f32,
+                _ => 0.20f32,
             };
             let index = Self::choose_with_dirichlet_noice(&vector, noise_percentage);
 

@@ -25,8 +25,7 @@ pyo3 = { version = "0.17.1", features = [] }
 num_cpus = "1.13.1"
 crossbeam = "0.8.2"
 flume = "0.10.14"
-tensorflow = "0.19.1"
-tensorflow-sys = { version = "0.22.1", features = ["runtime_linking"] }
+
 tflitec = { version = "0.5.1", features = ["xnnpack"] }
 rand = "0.8.5"
 rand_distr = "0.4.3"

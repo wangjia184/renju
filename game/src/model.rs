@@ -1,23 +1,9 @@
-use bytemuck::cast_slice;
 use bytes::Bytes;
 use num_cpus;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList, PyTuple};
 use std::fs::OpenOptions;
 use std::io::prelude::*;
-
-use tensorflow::Graph;
-use tensorflow::Operation;
-use tensorflow::SavedModelBundle;
-use tensorflow::SessionOptions;
-use tensorflow_sys as tf;
-
-use std::sync::Once;
-
-use tensorflow::SessionRunArgs;
-use tensorflow::Tensor;
-
-use tensorflow::Status;
 
 use tflitec::interpreter::{Interpreter, Options};
 use tflitec::tensor;
@@ -26,13 +12,6 @@ use crate::game::*;
 
 pub struct PolicyValueModel {
     module: Py<PyModule>,
-}
-
-pub struct OnDeviceModel {
-    graph: Graph,
-    bundle: SavedModelBundle,
-    predict_input: Operation,
-    predict_output: Operation,
 }
 
 //
@@ -82,46 +61,6 @@ impl PolicyValueModel {
         }
 
         renju_model
-    }
-
-    pub fn predict_batch(
-        self: &Self,
-        state_tensors: Vec<StateTensor>,
-    ) -> PyResult<Vec<(SquareMatrix<f32>, f32)>> {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            py.check_signals()?;
-            let predict_fn: Py<PyAny> = self.module.as_ref(py).getattr("predict_batch")?.into();
-
-            let batch_size = state_tensors.len();
-            let state_batch: &PyList = PyList::new(py, state_tensors);
-
-            let args = PyTuple::new(py, &[state_batch]);
-            let result = predict_fn.call1(py, args)?;
-            let tuple = <PyTuple as PyTryFrom>::try_from(result.as_ref(py))?;
-
-            let prob_matrix_list = <PyList as PyTryFrom>::try_from(tuple.get_item(0)?)?;
-            let score_list = <PyList as PyTryFrom>::try_from(tuple.get_item(1)?)?;
-            assert_eq!(prob_matrix_list.len(), batch_size);
-            assert_eq!(score_list.len(), batch_size);
-
-            let mut pairs = Vec::with_capacity(batch_size);
-            for index in 0..batch_size {
-                let probs = <PyList as PyTryFrom>::try_from(prob_matrix_list.get_item(index)?)?;
-                assert_eq!(probs.len(), BOARD_SIZE * BOARD_SIZE);
-                let mut prob_matrix: SquareMatrix<f32> = SquareMatrix::default();
-                for (idx, prob) in probs.iter().enumerate() {
-                    let probability = prob.extract::<f32>()?;
-                    prob_matrix[idx / BOARD_SIZE][idx % BOARD_SIZE] = probability;
-                }
-
-                let score: f32 = score_list.get_item(index)?.get_item(0)?.extract()?;
-
-                pairs.push((prob_matrix, score));
-            }
-
-            Ok(pairs)
-        })
     }
 
     pub fn train(
@@ -220,96 +159,6 @@ impl PolicyValueModel {
             save_fn.call1(py, args)?;
             Ok(())
         })
-    }
-}
-
-static START: Once = Once::new();
-
-impl OnDeviceModel {
-    pub fn load(export_dir: &str) -> Result<Self, Status> {
-        START.call_once(|| {
-            if let Err(e) = tf::library::load() {
-                println!("Unable to load libtensorflow. Please download from https://www.tensorflow.org/install/lang_c");
-                panic!("Unable to initialize tensorflow. {}", e);
-            }
-        });
-
-        let mut graph = Graph::new();
-        let bundle =
-            SavedModelBundle::load(&SessionOptions::new(), &["serve"], &mut graph, export_dir)?;
-
-        // predict
-        let predict_signature = bundle
-            .meta_graph_def()
-            .get_signature("predict")
-            .expect("Unable to find concreate function `predict`");
-        let inputs_info = predict_signature
-            .get_input("state_batch")
-            .expect("Unable to find `state_batch` in concreate function `predict`");
-        let act_output_info = predict_signature
-            .get_output("output_0")
-            .expect("Unable to find `output_0` in concreate function `predict`");
-        let predict_input_op = graph
-            .operation_by_name_required(&inputs_info.name().name)
-            .expect("Unable to find `state_batch` op in concreate function `predict`");
-        let predict_output_op = graph
-            .operation_by_name_required(&act_output_info.name().name)
-            .expect("Unable to find `output_0` in concreate function `predict`");
-
-        let model = Self {
-            graph: graph,
-            bundle: bundle,
-            predict_input: predict_input_op,
-            predict_output: predict_output_op,
-        };
-
-        Ok(model)
-    }
-
-    pub fn predict(
-        self: &Self,
-        state_tensors: &[StateTensor],
-    ) -> PyResult<(SquareMatrix<f32>, f32)> {
-        assert!(!state_tensors.is_empty());
-
-        let state_batch = Tensor::<f32>::new(&[
-            state_tensors.len() as u64,
-            state_tensors[0].len() as u64,
-            state_tensors[0][0].len() as u64,
-            state_tensors[0][0][0].len() as u64,
-        ])
-        .with_values(cast_slice(&state_tensors))
-        .expect("Unable to create state batch tensor");
-
-        let mut prediction = SessionRunArgs::new();
-        prediction.add_feed(&self.predict_input, 0, &state_batch);
-        prediction.add_target(&self.predict_output);
-        let log_action_token = prediction.request_fetch(&self.predict_output, 0);
-        let value_token = prediction.request_fetch(&self.predict_output, 1);
-        self.bundle
-            .session
-            .run(&mut prediction)
-            .expect("Unable to run prediction");
-
-        // Check our results.
-        let action_tensor: Tensor<f32> = prediction
-            .fetch(log_action_token)
-            .expect("Unable to retrieve action result");
-        let value_tensor: Tensor<f32> = prediction
-            .fetch(value_token)
-            .expect("Unable to retrieve value");
-
-        assert_eq!(
-            action_tensor.dims(),
-            [BOARD_SIZE as u64 * BOARD_SIZE as u64]
-        );
-
-        let mut matrix = SquareMatrix::default();
-        action_tensor.iter().enumerate().for_each(|(index, x)| {
-            matrix[index / BOARD_SIZE][index % BOARD_SIZE] = *x;
-        });
-
-        Ok((matrix, value_tensor[0]))
     }
 }
 

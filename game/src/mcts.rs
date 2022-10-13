@@ -45,9 +45,6 @@ pub struct TreeNode {
     // The first half of the equation will do exactly that:
     // the action that currently has the highest estimated reward will be the chosen action.
     q: f32, // the exploitation part of the equation. average of evaluations of all leaves
-
-    // the number of rollouts that have been initiated but not yet completed, which we name as unobserved samples.
-    unobserved_times: u32,
 }
 
 // opened tree node for read or update
@@ -92,7 +89,7 @@ struct TreeNodeChildren {
 
 impl TreeNodeChildren {
     /// Select a direct child with max UCB(Q+U)
-    async fn select(self: &Self, c_puct: f32) -> Result<OpenedTreeNode, RecvError> {
+    async fn select(self: &Self, depth: usize, c_puct: f32) -> Result<OpenedTreeNode, RecvError> {
         let mut selected: Option<OpenedTreeNode> = None;
         let mut max_score = f32::MIN;
 
@@ -102,7 +99,7 @@ impl TreeNodeChildren {
 
             let score = child_node
                 .get()
-                .compute_score(c_puct, self.parent_visit_times);
+                .compute_score(depth <= 3, c_puct, self.parent_visit_times);
             if score > max_score {
                 max_score = score;
                 selected = Some(child_node);
@@ -125,7 +122,6 @@ impl TreeNode {
             parent: None,
             current: Arc::downgrade(&node),
             children: HashMap::new(),
-            unobserved_times: 0,
             visit_times: 0,
             probability: prob,
             q: 0f32,
@@ -155,7 +151,6 @@ impl TreeNode {
             parent: Some(self.current.clone()), // link to this one
             current: Arc::downgrade(&node),
             children: HashMap::new(),
-            unobserved_times: 0,
             visit_times: 0,
             probability: 0f32,
             q: 0f32,
@@ -199,7 +194,6 @@ impl TreeNode {
     }
 
     pub fn update(self: &mut Self, leaf_value: f32) {
-        self.unobserved_times -= 1;
         self.visit_times += 1;
 
         // q is the avarage score(evaluabl) in visit_times, initially q is zero
@@ -211,18 +205,21 @@ impl TreeNode {
     // Calculate and return the value for this node.
     // It is a combination of leaf evaluations Q, and this node's prior adjusted for its visit count, u.
     // c_puct: a number in (0, inf) controlling the relative impact of value Q, and prior probability P, on this node's score.
-    fn compute_score(self: &Self, c_puct: f32, parent_visit_times: u32) -> f32 {
+    fn compute_score(
+        self: &Self,
+        breadth_first: bool,
+        c_puct: f32,
+        parent_visit_times: u32,
+    ) -> f32 {
         // The second half of the equation adds exploration,
         // with the degree of exploration being controlled by the hyper-parameter ‘c’.
         // Effectively this part of the equation provides a measure of the uncertainty for the action’s reward estimate.
         // u = visit-count-adjusted prior score
-        if self.visit_times == 0 {
+        if breadth_first && self.visit_times == 0 {
             return f32::MAX;
         }
-        let u = c_puct
-            * self.probability
-            * f32::sqrt(parent_visit_times as f32 + self.unobserved_times as f32)
-            / (1f32 + self.visit_times as f32 + self.unobserved_times as f32);
+        let u = c_puct * self.probability * f32::sqrt(parent_visit_times as f32)
+            / (1f32 + self.visit_times as f32);
         return self.q + u;
     }
 
@@ -248,16 +245,17 @@ impl TreeNode {
 
         let mut current_node = Self::open_node(self_ref).await?;
 
-        current_node.get_mut().unobserved_times += 1;
+        let mut depth = 1;
         loop {
             if current_node.get().children.is_empty() {
                 break;
             } else {
                 let children = current_node.get().get_children();
-                drop(current_node); //release parent node before select children
-                current_node = children.select(c_puct).await?;
-                current_node.get_mut().unobserved_times += 1;
+                //drop(current_node); //release parent node before select children
+                current_node = children.select(depth, c_puct).await?;
+
                 moves.push(current_node.get().action.unwrap());
+                depth += 1;
             }
         }
 

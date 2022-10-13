@@ -36,7 +36,7 @@ def create_model(board_width, board_height):
 
             self.bn1 = tf.keras.layers.BatchNormalization()
 
-            self.relu1 = tf.keras.layers.ReLU()
+            self.relu1 = tf.keras.layers.LeakyReLU(alpha=0.1)
 
             self.conv2 = tf.keras.layers.Conv2D(filters, 
                 kernel_size=(3, 3), 
@@ -46,7 +46,7 @@ def create_model(board_width, board_height):
                 padding='same')
             self.bn2 = tf.keras.layers.BatchNormalization()
             
-            self.relu = tf.keras.layers.ReLU()
+            self.relu = tf.keras.layers.LeakyReLU(alpha=0.1)
         def call(self, input):
             shortcut = self.shortcut(input)
 
@@ -117,7 +117,7 @@ def create_model(board_width, board_height):
 
             self.action_bn = tf.keras.layers.BatchNormalization(name="action_bn")(self.action_conv)
 
-            self.action_act = tf.keras.layers.ReLU(name="action_activation")(self.action_bn)
+            self.action_act = tf.keras.layers.LeakyReLU(0.1, name="action_activation")(self.action_bn)
 
             # flatten tensor
             self.action_conv_flat = tf.keras.layers.Flatten(name="action_flatten")(self.action_act)
@@ -141,13 +141,13 @@ def create_model(board_width, board_height):
 
             self.evaluation_bn = tf.keras.layers.BatchNormalization(name="evaluation_bn")(self.evaluation_conv)
 
-            self.evaluation_act = tf.keras.layers.ReLU(name="evaluation_activation")(self.evaluation_bn)
+            self.evaluation_act = tf.keras.layers.LeakyReLU(0.1, name="evaluation_activation")(self.evaluation_bn)
 
             self.evaluation_conv_flat = tf.keras.layers.Flatten(name="evaluation_flatten")(self.evaluation_act)
 
             self.evaluation_fc1 = tf.keras.layers.Dense( 256,
                 name="evaluation_fc1",
-                activation=tf.keras.activations.relu,
+                activation=tf.keras.activations.elu,
                 kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta)
                 )(self.evaluation_conv_flat)
 
@@ -356,11 +356,34 @@ def to_list(x):
             ls[idx] = to_list(sub)
     return ls
 
-with open("latest.weights", mode='rb') as file:
-    buffer = file.read()
-    import_parameters(buffer)
+#with open("latest.weights", mode='rb') as file:
+#    buffer = file.read()
+#    import_parameters(buffer)
 #save_model('saved_model/20221012')
 #save_quantized_model('best.tflite')
 
 
+"""
+from pprint import pprint
+from keras.models import Model
+
+with open("/Users/jerry/projects/renju/renju.git/game/target/debug/data/1.pickle", mode='rb') as file:
+    buffer = file.read()
+    input = pickle.loads(buffer)
+    ls = to_list(input['state_tensor_batch'])
+    input = [ ls[1], ls[2] ]
+    predict_batch(input)[1]
+
+    print(renju.model.input)
+
     
+    for layer in renju.model.layers:
+        print(layer.name)
+        if layer.name == 'evaluation_flatten':
+            YY = layer.output
+
+    XX = renju.model.input
+    proxy_model = Model(XX, YY)
+
+    pprint( proxy_model.predict(input) )
+"""
