@@ -281,18 +281,33 @@ impl RenjuBoard {
 
         // update available positions
         // only allow srounding positions
-        let start_row = if pos.0 > DISTANCE {
-            pos.0 - DISTANCE
+        let (start_row, start_col, end_row, end_col) = if self.stones == 2
+            && self.matrix[BOARD_SIZE / 2][BOARD_SIZE / 2] == 1
+            && pos.0.abs_diff(BOARD_SIZE / 2) <= 1
+            && pos.1.abs_diff(BOARD_SIZE / 2) <= 1
+        {
+            let start_row = BOARD_SIZE / 2 - 2;
+            let start_col = BOARD_SIZE / 2 - 2;
+            let end_row = BOARD_SIZE / 2 + 2;
+            let end_col = BOARD_SIZE / 2 + 2;
+
+            (start_row, start_col, end_row, end_col)
         } else {
-            0
+            let distance = if self.stones <= 1 { 1 } else { DISTANCE };
+            let start_row = if pos.0 > distance {
+                pos.0 - distance
+            } else {
+                0
+            };
+            let start_col = if pos.1 > distance {
+                pos.1 - distance
+            } else {
+                0
+            };
+            let end_row = cmp::min(BOARD_SIZE - 1, pos.0 + distance);
+            let end_col = cmp::min(BOARD_SIZE - 1, pos.1 + distance);
+            (start_row, start_col, end_row, end_col)
         };
-        let start_col = if pos.1 > DISTANCE {
-            pos.1 - DISTANCE
-        } else {
-            0
-        };
-        let end_row = cmp::min(BOARD_SIZE - 1, pos.0 + DISTANCE);
-        let end_col = cmp::min(BOARD_SIZE - 1, pos.1 + DISTANCE);
 
         for row in start_row..=end_row {
             for col in start_col..=end_col {

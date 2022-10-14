@@ -255,7 +255,7 @@ def train(state_batch, prob_batch, score_batch, lr):
 
     entropy = -np.mean(np.sum(action_probs * np.log(action_probs + 1e-10), axis=1))
     
-    renju.model.fit( state_batch, [prob_batch, score_batch], batch_size=batch_size)
+    renju.model.fit( state_batch, [prob_batch, score_batch], batch_size=batch_size, verbose=0)
     return (loss[0], entropy)
 
 def predict_batch(state_batch):

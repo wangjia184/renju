@@ -1,16 +1,18 @@
-use crate::game::{RenjuBoard, SquareMatrix, StateTensor, TerminalState};
+use crate::game::{RenjuBoard, SquareMatrix, StateTensor, TerminalState, BOARD_SIZE};
 
 use crate::mcts::MonteCarloTree;
 use crate::model::TfLiteModel;
 
 use crossbeam::atomic::AtomicCell;
+
 use std::sync::atomic::Ordering;
 use tokio::sync::RwLock;
 
 use std::cell::RefCell;
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
-use std::thread;
-use tokio::task::{self, JoinHandle};
+use tokio::task::JoinHandle;
+
+use rand::seq::SliceRandom;
 
 static SINGLETON: Mutex<Option<Arc<RwLock<HumanVsMachineMatch>>>> = Mutex::new(None);
 
@@ -30,6 +32,12 @@ fn get_match() -> Arc<RwLock<HumanVsMachineMatch>> {
         return x.clone();
     }
     unreachable!()
+}
+
+pub async fn get_state() -> MatchState {
+    let instance = get_match();
+    let lock = instance.read().await;
+    lock.get_board().get_state()
 }
 
 pub async fn human_move(pos: (usize, usize)) -> BoardInfo {
@@ -287,7 +295,7 @@ impl AiPlayer {
 
     pub async fn do_next_move(
         self: &Self,
-        _: &RenjuBoard,
+        board: &RenjuBoard,
         choices: &Vec<(usize, usize)>,
     ) -> (usize, usize) {
         let pos = if choices.len() == 1 {
@@ -299,15 +307,22 @@ impl AiPlayer {
                 .await
                 .expect("get_move_probability() failed");
 
-            let pair = move_prob_pairs
-                .into_iter()
-                .max_by(|(_, left_score), (_, right_score)| {
-                    left_score
-                        .partial_cmp(right_score)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .expect("At least one pair");
-            pair.0
+            match board.get_stones() {
+                1..=2 if board.get_matrix()[BOARD_SIZE / 2][BOARD_SIZE / 2] == 1 => {
+                    move_prob_pairs.choose(&mut rand::thread_rng()).unwrap().0
+                }
+                _ => {
+                    let pair = move_prob_pairs
+                        .into_iter()
+                        .max_by(|(_, left_score), (_, right_score)| {
+                            left_score
+                                .partial_cmp(right_score)
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                        .expect("At least one pair");
+                    pair.0
+                }
+            }
         };
 
         let visit_time_matrix = self
