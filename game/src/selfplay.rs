@@ -51,7 +51,7 @@ impl Trainer {
             mcts_c_puct: 3f32,
             mcts_iterations: 2000,
             epochs: 5,
-            learn_rate: 1e-3,
+            learn_rate: 1e-4,
             lr_multiplier: 3f32,
             kl_targ: 0.02f32,
         }
