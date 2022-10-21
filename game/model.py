@@ -356,10 +356,10 @@ def to_list(x):
             ls[idx] = to_list(sub)
     return ls
 
-#with open("latest.weights", mode='rb') as file:
-#    buffer = file.read()
-#    import_parameters(buffer)
-#save_quantized_model('best.tflite')
+with open("latest.weights", mode='rb') as file:
+    buffer = file.read()
+    import_parameters(buffer)
+save_quantized_model('best.tflite')
 
 
 """
