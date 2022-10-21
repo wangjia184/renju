@@ -361,6 +361,7 @@ def to_list(x):
 #   import_parameters(buffer)
 #save_quantized_model('best.tflite')
 
+save_model( "saved_model/20221021" )
 
 """
 from pprint import pprint

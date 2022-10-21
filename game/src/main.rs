@@ -14,6 +14,7 @@ mod game;
 mod human;
 mod mcts;
 mod model;
+
 mod selfplay;
 use human::MatchState;
 use selfplay::Trainer;
