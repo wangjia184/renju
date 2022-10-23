@@ -9,13 +9,8 @@ use clap::{Parser, Subcommand};
 
 use tokio::time::{sleep, Duration};
 
-mod contest;
-mod game;
-mod human;
-mod mcts;
-mod model;
+use renju::*;
 
-mod selfplay;
 use human::MatchState;
 use selfplay::Trainer;
 

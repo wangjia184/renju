@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod game_test {
-    use renju_game::game::*;
+    use renju::game::*;
 
     #[test]
     fn test_flip_left_right() {

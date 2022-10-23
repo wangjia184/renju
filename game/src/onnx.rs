@@ -7,7 +7,6 @@ include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 // API doc : https://onnxruntime.ai/docs/api/c/struct_ort_api.html
 // C API Example https://github.com/microsoft/onnxruntime-openenclave/blob/openenclave-public/csharp/test/Microsoft.ML.OnnxRuntime.EndToEndTests.Capi/C_Api_Sample.cpp
 
-use crate::game::{SquareMatrix, StateTensor, StateTensorExtension};
 use std::any::TypeId;
 use std::ffi::{CStr, CString};
 use std::mem;
@@ -474,17 +473,30 @@ impl Drop for MemoryInfo {
 }
 
 impl MemoryInfo {
-    pub fn create_state_tensor(self: &Self, state_tensors: &mut [StateTensor<f32>]) -> Tensor {
-        let shape = state_tensors.shape();
-        let size = mem::size_of_val(state_tensors);
-        let data_ptr: &mut [f32] = bytemuck::cast_slice_mut(state_tensors);
+    pub fn create_tensor_with_data<T: 'static>(
+        self: &Self,
+        data: &mut [T],
+        shape: &[i64],
+    ) -> Tensor {
+        let size = shape.iter().copied().reduce(|a, b| a * b).unwrap();
+        assert_eq!(size, data.len() as i64);
+
+        let type_id = TypeId::of::<T>();
+        let data_type = if type_id == TypeId::of::<f32>() {
+            ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
+        } else if type_id == TypeId::of::<f64>() {
+            ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE
+        } else {
+            unimplemented!("Unsupported data type {:?}", type_id);
+        };
+
         API.create_tensor_with_data_as_ort_value(
             self,
-            data_ptr.as_mut_ptr() as *mut c_void,
-            size,
+            data.as_mut_ptr() as *mut c_void,
+            data.len() * mem::size_of::<T>(),
             shape.as_ptr(),
             shape.len(),
-            ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT,
+            data_type,
         )
     }
 }
@@ -598,6 +610,8 @@ impl TensorTypeAndShape {
 
 #[test]
 fn test_ort() {
+    use crate::game::{SquareMatrix, StateTensor, StateTensorExtension};
+
     let mut session_options = API.create_session_options();
     session_options.set_intra_op_num_threads(1);
     session_options.set_session_graph_optimization_level(GraphOptimizationLevel_ORT_ENABLE_ALL);
@@ -611,7 +625,9 @@ fn test_ort() {
     state_tensor[1][7][7] = 1f32;
     state_tensor[2][7][7] = 1f32;
     let mut state_tensor_batch = vec![state_tensor];
-    let input_tensor = memory_info.create_state_tensor(&mut state_tensor_batch);
+    let shape = state_tensor_batch.shape();
+    let input_tensor = memory_info
+        .create_tensor_with_data::<f32>(bytemuck::cast_slice_mut(&mut state_tensor_batch), &shape);
 
     let session = API.create_session("model.onnx", &session_options);
     let output_tensors = session.run(&input_tensor);

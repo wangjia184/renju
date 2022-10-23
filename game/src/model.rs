@@ -9,6 +9,7 @@ use tflitec::interpreter::{Interpreter, Options};
 use tflitec::tensor;
 
 use crate::game::*;
+use crate::onnx::*;
 
 pub struct PolicyValueModel {
     module: Py<PyModule>,
@@ -225,3 +226,5 @@ impl TfLiteModel {
         Ok((prob_matrix, score))
     }
 }
+
+pub struct OnnxModel {}

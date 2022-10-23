@@ -1,5 +1,5 @@
 [package]
-name = "renju_game"
+name = "renju"
 version = "0.1.0"
 edition = "2021"
 authors = ["Jerry.Wang", "vcer@qq.com"]

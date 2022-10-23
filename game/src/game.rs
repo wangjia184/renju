@@ -13,7 +13,7 @@ pub type StateTensor<T = f32> = [SquareMatrix<T>; CHANNELS];
 pub trait StateTensorExtension {
     fn shape(self: &Self) -> [i64; 4];
 }
-impl<T> StateTensorExtension for &mut [StateTensor<T>] {
+impl<T> StateTensorExtension for [StateTensor<T>] {
     fn shape(self: &Self) -> [i64; 4] {
         return [
             self.len() as i64,
