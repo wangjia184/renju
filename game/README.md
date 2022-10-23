@@ -25,4 +25,4 @@ pip3 install tensorflow_probability
 pip3 install git+ssh://git@github.com/onnx/tensorflow-onnx.git
 ```
 
-python3 -m tf2onnx.convert --saved-model saved_model/20221021 --opset 17 --output model.onnx
+python3 -m tf2onnx.convert --saved-model saved_model/20221023  --opset 17 --output model.onnx

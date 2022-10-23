@@ -189,12 +189,12 @@ def create_model(board_width, board_height):
 
     
         @tf.function(input_signature=[
-            tf.TensorSpec([None, 4, board_height, board_width], tf.float32),
+            tf.TensorSpec([1, 4, board_height, board_width], tf.float32),
         ])
-        def predict(self, state_batch):
+        def predict_one(self, state_batch):
             probs, scores = renju.model(state_batch)
             # probs shape=(None, 225); scores shape=(None, 1), [[-0.14458223]]
-            return probs[0], scores[0][0]
+            return probs[0], scores[0]
 
         @tf.function(input_signature=[
             tf.TensorSpec([None, 4, board_height, board_width], tf.float32),
@@ -211,21 +211,7 @@ def create_model(board_width, board_height):
 
 renju = create_model( 15, 15)
 
-def save_model(folder_name):
-    #Saving the model, explictly adding the concrete functions as signatures
-    renju.model.save(folder_name, 
-            save_format='tf', 
-            overwrite=True,
-            include_optimizer=True,
-            signatures={
-                'predict': renju.predict.get_concrete_function(), 
-                'train' : renju.train.get_concrete_function(), 
-                'save' : renju.save.get_concrete_function(),
-                'restore' : renju.restore.get_concrete_function(),
-                'random_choose_with_dirichlet_noice' : renju.random_choose_with_dirichlet_noice.get_concrete_function(),
-                'export_param' : renju.export_param.get_concrete_function(),
-                'import_param' : renju.import_param.get_concrete_function(),
-            })
+
 
 """"""
 def train(state_batch, prob_batch, score_batch, lr):
@@ -316,7 +302,7 @@ def save_model(folder_name):
             overwrite=True,
             include_optimizer=True,
             signatures={
-                'predict': renju.predict.get_concrete_function()
+                'predict_one': renju.predict_one.get_concrete_function()
             })
 
 
@@ -356,12 +342,12 @@ def to_list(x):
             ls[idx] = to_list(sub)
     return ls
 
-#with open("latest.weights", mode='rb') as file:
-#   buffer = file.read()
-#   import_parameters(buffer)
+with open("latest.weights", mode='rb') as file:
+   buffer = file.read()
+   import_parameters(buffer)
 #save_quantized_model('best.tflite')
 
-save_model( "saved_model/20221021" )
+save_model( "saved_model/20221023" )
 
 """
 from pprint import pprint

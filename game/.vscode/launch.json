@@ -27,6 +27,10 @@
                 }
             },
             "args": [],
+            "env": {
+                "DYLD_LIBRARY_PATH": "/Users/jerry/projects/renju/renju.git/game/lib/aarch64-apple-darwin",
+                "LD_LIBRARY_PATH": "/Users/jerry/projects/renju/renju.git/game/lib/aarch64-apple-darwin"
+            },
             "cwd": "${workspaceFolder}"
         },
         {
@@ -46,7 +50,8 @@
             },
             "args": [],
             "env": {
-                "DYLD_LIBRARY_PATH": "/opt/homebrew/opt/tensorflow/lib:/Users/jerry/projects/renju/renju.git/game"
+                "DYLD_LIBRARY_PATH": "/Users/jerry/projects/renju/renju.git/game/lib/aarch64-apple-darwin",
+                "LD_LIBRARY_PATH": "/Users/jerry/projects/renju/renju.git/game/lib/aarch64-apple-darwin"
             },
             "cwd": "${workspaceFolder}"
         },
@@ -67,6 +72,10 @@
                 }
             },
             "args": [],
+            "env": {
+                "DYLD_LIBRARY_PATH": "/Users/jerry/projects/renju/renju.git/game/lib/aarch64-apple-darwin",
+                "LD_LIBRARY_PATH": "/Users/jerry/projects/renju/renju.git/game/lib/aarch64-apple-darwin"
+            },
             "cwd": "${workspaceFolder}"
         },
         {
@@ -86,6 +95,10 @@
                 }
             },
             "args": [],
+            "env": {
+                "DYLD_LIBRARY_PATH": "/Users/jerry/projects/renju/renju.git/game/lib/aarch64-apple-darwin",
+                "LD_LIBRARY_PATH": "/Users/jerry/projects/renju/renju.git/game/lib/aarch64-apple-darwin"
+            },
             "cwd": "${workspaceFolder}"
         }
     ]
