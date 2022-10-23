@@ -1,7 +1,7 @@
 use crate::game::{RenjuBoard, SquareMatrix, StateTensor, TerminalState, BOARD_SIZE};
 
 use crate::mcts::MonteCarloTree;
-use crate::model::TfLiteModel;
+use crate::model::{OnnxModel, TfLiteModel};
 
 use crossbeam::atomic::AtomicCell;
 
@@ -250,7 +250,14 @@ impl HumanVsMachineMatch {
 }
 
 // each thread creates a dedicated model
-thread_local!(static MODEL: RefCell<Option<TfLiteModel>> = RefCell::new(None));
+// thread_local!(static MODEL: RefCell<Option<OnnxModel>> = RefCell::new(None));
+
+use unsafe_send_sync::UnsafeSendSync;
+
+lazy_static! {
+    pub static ref MODEL: UnsafeSendSync<OnnxModel> =
+        UnsafeSendSync::new(OnnxModel::load("model.onnx"));
+}
 
 pub struct AiPlayer {
     tree: MonteCarloTree,
@@ -275,19 +282,7 @@ impl AiPlayer {
     pub async fn think(self: &Self, board: RenjuBoard, choices: &Vec<(usize, usize)>) {
         self.tree
             .rollout(board, choices, |state_tensor: StateTensor| {
-                MODEL.with(|ref_cell| {
-                    let mut model = ref_cell.borrow_mut();
-                    if model.is_none() {
-                        *model = Some(
-                            TfLiteModel::load("best.tflite").expect("Unable to load saved model"),
-                        )
-                    }
-                    model
-                        .as_ref()
-                        .unwrap()
-                        .predict_one(state_tensor)
-                        .expect("Unable to predict_one")
-                })
+                MODEL.predict_one(state_tensor)
             })
             .await
             .expect("rollout failed")

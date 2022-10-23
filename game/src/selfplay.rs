@@ -10,7 +10,7 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::fs;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::RwLock;
 use std::time::Instant;
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -19,11 +19,16 @@ use tokio::task::JoinHandle;
 
 use crate::game::*;
 use crate::mcts::MonteCarloTree;
-use crate::model::{PolicyValueModel, TfLiteModel};
+use crate::model::{OnnxModel, PolicyValueModel};
 
 // each thread creates a dedicated model
-thread_local!(static MODEL: RefCell<Option<TfLiteModel>> = RefCell::new(None));
-static MODEL_FILE: Mutex<String> = Mutex::new(String::new());
+// thread_local!(static MODEL: RefCell<Option<OnnxModel>> = RefCell::new(None));
+
+use unsafe_send_sync::UnsafeSendSync;
+
+lazy_static! {
+    pub static ref MODEL: RwLock<Option<UnsafeSendSync<OnnxModel>>> = RwLock::new(None);
+}
 
 pub struct Trainer {
     parallel_num: u32, // parallel self-play matches for a single open pattern
@@ -49,7 +54,7 @@ impl Trainer {
             batch_size: 500,
             parallel_num: 1, // parallel self-play matches for a single open pattern
             mcts_c_puct: 3f32,
-            mcts_iterations: 2000,
+            mcts_iterations: 400,
             epochs: 5,
             learn_rate: 1e-3,
             lr_multiplier: 3f32,
@@ -61,12 +66,12 @@ impl Trainer {
         let training_model = PolicyValueModel::get_latest();
         let mut dir = std::env::current_exe().expect("env::current_exe() failed");
         dir.pop();
-        let model_file = Path::join(&dir, "training.tflite").display().to_string();
+        let model_file = Path::join(&dir, "training.onnx").display().to_string();
         _ = fs::remove_file(&model_file);
         loop {
             training_model
-                .save_quantized_model(&model_file)
-                .expect("save_quantized_model() failed");
+                .convert_to_onnx_model(&model_file)
+                .expect("convert_to_onnx_model() failed");
 
             let export_dir = Path::join(&dir, "data").display().to_string();
             _ = std::fs::create_dir_all(&export_dir);
@@ -115,7 +120,11 @@ impl Trainer {
     }
 
     pub async fn produce_self_play_data(self: &mut Self, model_file: &str, export_dir: &str) {
-        *MODEL_FILE.lock().unwrap() = model_file.to_string();
+        let mut model = MODEL.write().unwrap();
+        if model.is_none() {
+            *model = Some(UnsafeSendSync::new(OnnxModel::load(model_file)));
+        }
+        drop(model);
 
         let handles = self.start_groups();
 
@@ -592,20 +601,9 @@ impl SelfPlayer {
         for _ in 0..iterations {
             self.tree
                 .rollout(board.clone(), choices, |state_tensor: StateTensor| {
-                    MODEL.with(|ref_cell| {
-                        let mut model = ref_cell.borrow_mut();
-                        if model.is_none() {
-                            let m = TfLiteModel::load(&MODEL_FILE.lock().unwrap())
-                                .expect("Unable to load tflite model");
-                            *model = Some(m);
-                        }
-
-                        model
-                            .as_ref()
-                            .unwrap()
-                            .predict_one(state_tensor)
-                            .expect("Unable to predict_one")
-                    })
+                    let lock = MODEL.read().unwrap();
+                    let model = lock.as_ref().unwrap();
+                    model.predict_one(state_tensor)
                 })
                 .await
                 .expect("rollout failed");

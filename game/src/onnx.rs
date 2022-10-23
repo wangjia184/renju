@@ -15,7 +15,7 @@ use std::ptr;
 use std::sync::Once;
 
 lazy_static! {
-    static ref API: OnnxApi = unsafe {
+    pub static ref API: OnnxApi = unsafe {
         let base = OrtGetApiBase();
         assert_ne!(base, 0 as *const OrtApiBase);
         if let Some(get_api_fn) = (*base).GetApi {
@@ -414,6 +414,14 @@ impl SessionOptions {
     ) {
         unsafe { (API.set_session_graph_optimization_level_fn)(self.0, graph_optimization_level) };
     }
+
+    pub fn append_execution_provider_core_ml(self: &mut Self, flags: COREMLFlags) {
+        let status_ptr = unsafe { OrtSessionOptionsAppendExecutionProvider_CoreML(self.0, flags) };
+        API.verify_status(
+            "OrtSessionOptionsAppendExecutionProvider_CoreML",
+            status_ptr,
+        );
+    }
 }
 
 #[derive(Debug)]
@@ -529,11 +537,13 @@ impl Tensor {
             shape: type_and_shape.1,
         }
     }
+
+    #[allow(dead_code)]
     fn get_shape(&self) -> &Vec<i64> {
         &self.shape
     }
 
-    fn copy_to<T: 'static>(self: &Self, dst: &mut [T]) {
+    pub fn copy_to<T: 'static>(self: &Self, dst: &mut [T]) {
         let type_id = TypeId::of::<T>();
         let expected_type_id = match self.element_type {
             ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT => TypeId::of::<f32>(),

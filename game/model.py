@@ -10,6 +10,9 @@ import numpy as np
 import platform
 import tensorflow as tf
 import tensorflow_probability as tfp
+import tf2onnx
+import onnxruntime
+from onnxruntime.quantization import CalibrationDataReader, QuantFormat, QuantType, quantize_static
 
 print( "platform: ", platform.platform() )
 print( "tensorflow version:", tf.__version__ )
@@ -36,7 +39,7 @@ def create_model(board_width, board_height):
 
             self.bn1 = tf.keras.layers.BatchNormalization()
 
-            self.relu1 = tf.keras.layers.LeakyReLU(alpha=0.1)
+            self.relu1 = tf.keras.layers.ReLU()
 
             self.conv2 = tf.keras.layers.Conv2D(filters, 
                 kernel_size=(3, 3), 
@@ -46,7 +49,7 @@ def create_model(board_width, board_height):
                 padding='same')
             self.bn2 = tf.keras.layers.BatchNormalization()
             
-            self.relu = tf.keras.layers.LeakyReLU(alpha=0.1)
+            self.relu = tf.keras.layers.ReLU()
         def call(self, input):
             shortcut = self.shortcut(input)
 
@@ -117,7 +120,7 @@ def create_model(board_width, board_height):
 
             self.action_bn = tf.keras.layers.BatchNormalization(name="action_bn")(self.action_conv)
 
-            self.action_act = tf.keras.layers.LeakyReLU(0.1, name="action_activation")(self.action_bn)
+            self.action_act = tf.keras.layers.ReLU(name="action_activation")(self.action_bn)
 
             # flatten tensor
             self.action_conv_flat = tf.keras.layers.Flatten(name="action_flatten")(self.action_act)
@@ -141,15 +144,17 @@ def create_model(board_width, board_height):
 
             self.evaluation_bn = tf.keras.layers.BatchNormalization(name="evaluation_bn")(self.evaluation_conv)
 
-            self.evaluation_act = tf.keras.layers.LeakyReLU(0.1, name="evaluation_activation")(self.evaluation_bn)
+            self.evaluation_act = tf.keras.layers.ReLU( name="evaluation_activation")(self.evaluation_bn)
 
             self.evaluation_conv_flat = tf.keras.layers.Flatten(name="evaluation_flatten")(self.evaluation_act)
 
             self.evaluation_fc1 = tf.keras.layers.Dense( 256,
                 name="evaluation_fc1",
-                activation=tf.keras.activations.elu,
+                activation=tf.keras.activations.relu,
                 kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta)
                 )(self.evaluation_conv_flat)
+
+            #self.evaluation_fc1_act = tf.keras.layers.ReLU( name="evaluation_fc1_activation")(self.evaluation_fc1)
 
             self.evaluation_fc2 = tf.keras.layers.Dense( 1, 
                 activation=tf.keras.activations.tanh,
@@ -319,10 +324,11 @@ def save_quantized_model(file_name):
 
     converter = tf.lite.TFLiteConverter.from_keras_model(renju.model)
     converter.optimizations = [tf.lite.Optimize.DEFAULT]
-    converter.target_spec.supported_types = [tf.float16]
+    # converter.target_spec.supported_types = [tf.float16]
     
     # https://www.tensorflow.org/lite/performance/post_training_integer_quant
-    # converter.representative_dataset = representative_data_gen
+    converter.representative_dataset = representative_data_gen
+    converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
 
     # https://www.tensorflow.org/lite/performance/post_training_integer_quant_16x8
     # converter.target_spec.supported_ops = [tf.lite.OpsSet.EXPERIMENTAL_TFLITE_BUILTINS_ACTIVATIONS_INT16_WEIGHTS_INT8]
@@ -342,12 +348,44 @@ def to_list(x):
             ls[idx] = to_list(sub)
     return ls
 
-with open("latest.weights", mode='rb') as file:
-   buffer = file.read()
-   import_parameters(buffer)
-#save_quantized_model('best.tflite')
+try:
+    with open("latest.weights", mode='rb') as file:
+        buffer = file.read()
+        import_parameters(buffer)
+except IOError:
+      print( "Warning: No weights were loaded" )
 
-save_model( "saved_model/20221023" )
+class SampleInputDataReader(CalibrationDataReader):
+    def __init__(self):
+        with open("sample_input.pickle", mode='rb') as file:
+            buffer = file.read()
+            input = pickle.loads(buffer)
+            self.ls = iter(to_list(input['state_tensor_batch']))
+
+    def get_next(self):
+        data = next( self.ls, None)
+        if data:
+            return { 'input' : [ data ] }
+        return None
+
+def convert_to_onnx_model(file_name):
+    save_quantized_model(file_name + '.tflite')
+    #spec = (tf.TensorSpec((1, 4, 15, 15), tf.float32, name="input"),)
+    #tf2onnx.convert.from_keras(renju.model, input_signature=spec, opset=17, output_path=file_name+".2")
+    tf2onnx.convert.from_tflite( file_name + '.tflite', output_path=file_name)
+    #dr = SampleInputDataReader()
+    #quantize_static(
+    #    file_name+".2",
+    #    file_name,
+    #    dr,
+    #    quant_format=QuantFormat.QDQ,
+    #    per_channel=False,
+    #    activation_type=QuantType.QInt8,
+    #    weight_type=QuantType.QInt8,
+    #    optimize_model=False,
+    #)
+#convert_to_onnx_model("test.onnx")
+
 
 """
 from pprint import pprint
