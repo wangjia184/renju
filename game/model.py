@@ -22,7 +22,7 @@ print( "tensorflow_probability version:", tfp.__version__ )
 def create_model(board_width, board_height):
 
     l2_penalty_beta = 1e-4
-    data_format="channels_last"
+    data_format="channels_first"
 
     class ResBlock(tf.keras.Model):
         def __init__(self, filters):
@@ -81,7 +81,7 @@ def create_model(board_width, board_height):
 
              # 2. Common Networks Layers
             self.conv1 = tf.keras.layers.Conv2D( name="conv1",
-                filters=32,
+                filters=64,
                 kernel_size=(3, 3),
                 padding="same",
                 data_format=data_format,
@@ -89,25 +89,25 @@ def create_model(board_width, board_height):
                 )(self.source)
 
             self.reslayer = tf.keras.Sequential([
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
             ], name='resblocks')(self.conv1)
 
             # 3-1 Action Networks
@@ -150,7 +150,7 @@ def create_model(board_width, board_height):
 
             self.evaluation_fc1 = tf.keras.layers.Dense( 256,
                 name="evaluation_fc1",
-                activation=tf.keras.activations.relu,
+                activation=tf.keras.activations.elu,
                 kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta)
                 )(self.evaluation_conv_flat)
 
@@ -323,12 +323,12 @@ def save_quantized_model(file_name):
             yield [tf.convert_to_tensor([input_value])]
 
     converter = tf.lite.TFLiteConverter.from_keras_model(renju.model)
-    converter.optimizations = [tf.lite.Optimize.DEFAULT]
-    # converter.target_spec.supported_types = [tf.float16]
+    # converter.optimizations = [tf.lite.Optimize.DEFAULT]
+    converter.target_spec.supported_types = [tf.float16]
     
     # https://www.tensorflow.org/lite/performance/post_training_integer_quant
-    converter.representative_dataset = representative_data_gen
-    converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
+    # converter.representative_dataset = representative_data_gen
+    # converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
 
     # https://www.tensorflow.org/lite/performance/post_training_integer_quant_16x8
     # converter.target_spec.supported_ops = [tf.lite.OpsSet.EXPERIMENTAL_TFLITE_BUILTINS_ACTIVATIONS_INT16_WEIGHTS_INT8]
