@@ -9,6 +9,9 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::sync::{Arc, RwLock};
 
+
+
+
 pub struct SelfPlayMatch<'a> {
     board: RenjuBoard,
     black_player: &'a mut SelfPlayer<PolicyValueModel>,
@@ -67,98 +70,12 @@ impl<'a> SelfPlayMatch<'a> {
     }
 }
 
-pub struct AiPlayer<M>
-where
-    M: RenjuModel + Send,
-{
-    tree: Arc<MonteCarloTree<M>>,
-    // temperature parameter in (0, 1] controls the level of exploration
-    temperature: f32,
-    last_visit_times: RwLock<SquareMatrix<u32>>,
-    iterations: u32,
-}
-
-impl<M> AiPlayer<M>
-where
-    M: RenjuModel + Send,
-{
-    pub fn get_visit_times(self: &Self) -> SquareMatrix<u32> {
-        *self.last_visit_times.read().unwrap()
-    }
-    pub fn new(model: M, iterations: u32) -> Self {
-        let tree = Arc::new(MonteCarloTree::new(5f32, model));
-        Self {
-            tree: tree,
-            temperature: 1e-3,
-            last_visit_times: RwLock::new(SquareMatrix::default()),
-            iterations: iterations,
-        }
-    }
-
-    pub async fn rollout(self: &Self, board: RenjuBoard, choices: &Vec<(usize, usize)>) {
-        self.tree
-            .rollout(board, choices)
-            .await
-            .expect("rollout failed")
-    }
-
-    pub async fn do_next_move(
-        self: &Self,
-        board: &RenjuBoard,
-        choices: &Vec<(usize, usize)>,
-    ) -> (usize, usize) {
-        let pos = if choices.len() == 1 {
-            choices[0]
-        } else {
-            for _ in 0..self.iterations {
-                self.tree
-                    .rollout(board.clone(), choices)
-                    .await
-                    .expect("rollout failed");
-            }
-            let move_prob_pairs: Vec<((usize, usize), f32)> = self
-                .tree
-                .get_move_probability(self.temperature)
-                .await
-                .expect("get_move_probability() failed");
-
-            let pair = move_prob_pairs
-                .into_iter()
-                .max_by(|(_, left_score), (_, right_score)| {
-                    left_score
-                        .partial_cmp(right_score)
-                        .unwrap_or(Ordering::Equal)
-                })
-                .expect("At least one pair");
-            pair.0
-        };
-
-        *self.last_visit_times.write().unwrap() = self
-            .tree
-            .get_visit_times()
-            .await
-            .expect("get_visit_times() failed");
-        self.tree
-            .update_with_position(pos)
-            .await
-            .expect("update_with_position() failed");
-        pos
-    }
-
-    pub async fn notify_opponent_moved(self: &Self, _: &RenjuBoard, pos: (usize, usize)) {
-        self.tree
-            .update_with_position(pos)
-            .await
-            .expect("update_with_position failed");
-    }
-}
-
 // play with self to produce training data
 pub struct SelfPlayer<M>
 where
     M: RenjuModel + Send,
 {
-    tree: Arc<MonteCarloTree<M>>,
+    tree: Arc<MonteCarloTree>,
     // temperature parameter in (0, 1] controls the level of exploration
     temperature: f32,
     state_prob_pairs: Vec<(StateTensor, SquareMatrix)>,
@@ -170,7 +87,7 @@ where
     M: RenjuModel + Send,
 {
     pub fn new_pair(model: M) -> (Self, Self) {
-        let tree = Arc::new(MonteCarloTree::new(5f32, model));
+        let tree = Arc::new(MonteCarloTree::new(5f32));
         (
             Self {
                 tree: tree.clone(),

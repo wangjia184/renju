@@ -1,54 +1,17 @@
-use bytemuck::cast_slice;
 use bytes::Bytes;
+use num_cpus;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList, PyTuple};
 use std::fs::OpenOptions;
 use std::io::prelude::*;
 
-use tensorflow::Graph;
-use tensorflow::Operation;
-use tensorflow::SavedModelBundle;
-use tensorflow::SessionOptions;
-use tensorflow_sys as tf;
-
-use std::sync::Once;
-
-use tensorflow::SessionRunArgs;
-use tensorflow::Tensor;
-
-use tensorflow::Status;
+use tflitec::interpreter::{Interpreter, Options};
+use tflitec::tensor;
 
 use crate::game::*;
 
 pub struct PolicyValueModel {
     module: Py<PyModule>,
-}
-
-pub struct OnDeviceModel {
-    graph: Graph,
-    bundle: SavedModelBundle,
-    predict_input: Operation,
-    predict_output: Operation,
-}
-
-pub trait RenjuModel {
-    fn train(
-        self: &Self,
-        state_tensors: &[StateTensor],
-        prob_matrixes: &[SquareMatrix],
-        scores: &[f32],
-        lr: f32,
-    ) -> PyResult<(f32, f32)>;
-
-    fn predict(
-        self: &Self,
-        state_tensors: &[StateTensor],
-        use_log_prob: bool, // true to return log probability
-    ) -> PyResult<(SquareMatrix<f32>, f32)>;
-
-    fn export(self: &Self) -> PyResult<Bytes>;
-
-    fn import(self: &Self, buffer: Bytes) -> PyResult<()>;
 }
 
 //
@@ -75,17 +38,15 @@ impl PolicyValueModel {
         })
     }
 
-    pub fn get_best() -> Self {
-        let renju_model =
-            PolicyValueModel::new("/Users/jerry/projects/renju/renju.git/game/model.py")
-                .expect("Unable to load model");
+    pub fn get_latest() -> Self {
+        let renju_model = PolicyValueModel::new("model.py").expect("Unable to load model");
 
         if let Ok(mut file) = OpenOptions::new()
             .read(true)
             .write(false)
             .truncate(false)
             .create(false)
-            .open("best.ckpt")
+            .open("latest.weights")
         {
             let mut buffer = Vec::<u8>::with_capacity(100000);
             if let Ok(size) = file.read_to_end(&mut buffer) {
@@ -101,10 +62,8 @@ impl PolicyValueModel {
 
         renju_model
     }
-}
 
-impl RenjuModel for PolicyValueModel {
-    fn train(
+    pub fn train(
         self: &Self,
         state_tensors: &[StateTensor],
         prob_matrixes: &[SquareMatrix],
@@ -129,7 +88,7 @@ impl RenjuModel for PolicyValueModel {
         })
     }
 
-    fn predict(
+    pub fn predict(
         self: &Self,
         state_tensors: &[StateTensor],
         use_log_prob: bool,
@@ -162,7 +121,7 @@ impl RenjuModel for PolicyValueModel {
         })
     }
 
-    fn export(self: &Self) -> PyResult<Bytes> {
+    pub fn export(self: &Self) -> PyResult<Bytes> {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|py| {
             let export_fn: Py<PyAny> = self.module.as_ref(py).getattr("export_parameters")?.into();
@@ -175,7 +134,8 @@ impl RenjuModel for PolicyValueModel {
         })
     }
 
-    fn import(self: &Self, buffer: Bytes) -> PyResult<()> {
+    pub fn import(self: &Self, buffer: Bytes) -> PyResult<()> {
+        pyo3::prepare_freethreaded_python();
         Python::with_gil(|py| {
             let import_fn: Py<PyAny> = self.module.as_ref(py).getattr("import_parameters")?.into();
 
@@ -185,115 +145,83 @@ impl RenjuModel for PolicyValueModel {
             Ok(())
         })
     }
-}
 
-static START: Once = Once::new();
+    pub fn save_quantized_model(self: &Self, file_path: &str) -> PyResult<()> {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let save_fn: Py<PyAny> = self
+                .module
+                .as_ref(py)
+                .getattr("save_quantized_model")?
+                .into();
 
-impl OnDeviceModel {
-    pub fn load(export_dir: &str) -> Result<Self, Status> {
-        START.call_once(|| {
-            if let Err(e) = tf::library::load() {
-                println!("Unable to load libtensorflow. Please download from https://www.tensorflow.org/install/lang_c");
-                panic!("Unable to initialize tensorflow. {}", e);
-            }
-        });
-
-        let mut graph = Graph::new();
-        let bundle =
-            SavedModelBundle::load(&SessionOptions::new(), &["serve"], &mut graph, export_dir)?;
-
-        // predict
-        let predict_signature = bundle
-            .meta_graph_def()
-            .get_signature("predict")
-            .expect("Unable to find concreate function `predict`");
-        let inputs_info = predict_signature
-            .get_input("state_batch")
-            .expect("Unable to find `state_batch` in concreate function `predict`");
-        let act_output_info = predict_signature
-            .get_output("output_0")
-            .expect("Unable to find `output_0` in concreate function `predict`");
-        let predict_input_op = graph
-            .operation_by_name_required(&inputs_info.name().name)
-            .expect("Unable to find `state_batch` op in concreate function `predict`");
-        let predict_output_op = graph
-            .operation_by_name_required(&act_output_info.name().name)
-            .expect("Unable to find `output_0` in concreate function `predict`");
-
-        let model = Self {
-            graph: graph,
-            bundle: bundle,
-            predict_input: predict_input_op,
-            predict_output: predict_output_op,
-        };
-
-        Ok(model)
+            let args = PyTuple::new(py, &[file_path]);
+            save_fn.call1(py, args)?;
+            Ok(())
+        })
     }
 }
 
-impl RenjuModel for OnDeviceModel {
-    fn train(
-        self: &Self,
-        _state_tensors: &[StateTensor],
-        _prob_matrixes: &[SquareMatrix],
-        _scores: &[f32],
-        _lr: f32,
-    ) -> PyResult<(f32, f32)> {
-        unimplemented!()
+pub struct TfLiteModel {
+    interpreter: Interpreter,
+}
+
+impl TfLiteModel {
+    pub fn load(tflite_model_path: &str) -> Result<Self, tflitec::Error> {
+        // Create interpreter options
+        let mut options = Options::default();
+        options.thread_count = num_cpus::get() as i32 / 2;
+        options.is_xnnpack_enabled = true;
+        println!("is_xnnpack_enabled={}", options.is_xnnpack_enabled);
+
+        let interpreter = Interpreter::with_model_path(tflite_model_path, Some(options))?;
+
+        // Resize input
+        let input_shape = tensor::Shape::new(vec![1, 4, BOARD_SIZE, BOARD_SIZE]);
+        interpreter.resize_input(0, input_shape)?;
+        interpreter.allocate_tensors()?;
+
+        Ok(TfLiteModel {
+            interpreter: interpreter,
+        })
     }
 
-    fn predict(
+    pub fn predict_one(
         self: &Self,
-        state_tensors: &[StateTensor],
-        use_log_prob: bool, // true to return log probability
-    ) -> PyResult<(SquareMatrix<f32>, f32)> {
-        assert!(!state_tensors.is_empty());
-        assert_eq!(use_log_prob, false);
-        let state_batch = Tensor::<f32>::new(&[
-            state_tensors.len() as u64,
-            state_tensors[0].len() as u64,
-            state_tensors[0][0].len() as u64,
-            state_tensors[0][0][0].len() as u64,
-        ])
-        .with_values(cast_slice(&state_tensors))
-        .expect("Unable to create state batch tensor");
+        state_tensor: StateTensor,
+    ) -> Result<(SquareMatrix<f32>, f32), tflitec::Error> {
+        let input_tensor = self.interpreter.input(0)?;
+        assert_eq!(input_tensor.data_type(), tensor::DataType::Float32);
 
-        let mut prediction = SessionRunArgs::new();
-        prediction.add_feed(&self.predict_input, 0, &state_batch);
-        prediction.add_target(&self.predict_output);
-        let log_action_token = prediction.request_fetch(&self.predict_output, 0);
-        let value_token = prediction.request_fetch(&self.predict_output, 1);
-        self.bundle
-            .session
-            .run(&mut prediction)
-            .expect("Unable to run prediction");
+        assert!(input_tensor.set_data(&state_tensor).is_ok());
 
-        // Check our results.
-        let action_tensor: Tensor<f32> = prediction
-            .fetch(log_action_token)
-            .expect("Unable to retrieve action result");
-        let value_tensor: Tensor<f32> = prediction
-            .fetch(value_token)
-            .expect("Unable to retrieve value");
+        // Invoke interpreter
+        assert!(self.interpreter.invoke().is_ok());
+
+        // Get output tensor
+        let prob_matrix_tensor = self.interpreter.output(0)?;
+        let score_tensor = self.interpreter.output(1)?;
 
         assert_eq!(
-            action_tensor.dims(),
-            [BOARD_SIZE as u64 * BOARD_SIZE as u64]
+            prob_matrix_tensor.shape().dimensions(),
+            &vec![1, BOARD_SIZE as usize * BOARD_SIZE as usize]
         );
 
-        let mut matrix = SquareMatrix::default();
-        action_tensor.iter().enumerate().for_each(|(index, x)| {
-            matrix[index / BOARD_SIZE][index % BOARD_SIZE] = *x;
-        });
+        assert_eq!(score_tensor.shape().dimensions(), &vec![1, 1]);
 
-        Ok((matrix, value_tensor[0]))
-    }
+        let prob_matrix_data = prob_matrix_tensor.data::<f32>().to_vec();
+        let score_data = score_tensor.data::<f32>().to_vec();
 
-    fn export(self: &Self) -> PyResult<Bytes> {
-        unimplemented!()
-    }
+        let mut prob_matrix: SquareMatrix = SquareMatrix::default();
 
-    fn import(self: &Self, _: Bytes) -> PyResult<()> {
-        unimplemented!()
+        for row in 0..BOARD_SIZE {
+            prob_matrix[row] = prob_matrix_data[row * BOARD_SIZE..(row + 1) * BOARD_SIZE]
+                .try_into()
+                .unwrap();
+        }
+
+        let score = score_data[0];
+
+        Ok((prob_matrix, score))
     }
 }

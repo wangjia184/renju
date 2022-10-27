@@ -4,34 +4,23 @@
 )]
 extern crate clap;
 extern crate num_cpus;
-extern crate tensorflow;
-use bytes::Bytes;
+
 use clap::{Parser, Subcommand};
 
-use futures::SinkExt;
-use futures_util::stream::StreamExt;
-use tokio::net::{TcpListener, TcpStream};
-use tokio::process::{Child, Command};
-use tokio::sync::mpsc::{self, UnboundedSender};
-use tokio::sync::watch::{self, Receiver};
 use tokio::time::{sleep, Duration};
-use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
 mod contest;
 mod game;
-mod mcts;
-mod player;
-mod train;
-
-use train::{DataProducer, TrainDataItem, Trainer};
 mod human;
+mod mcts;
 mod model;
-
+mod selfplay;
 use human::MatchState;
+use selfplay::Trainer;
 
 static ABOUT_TEXT: &str = "Renju game ";
 
-static PRODUCE_MATCH_HELP_TEXT: &str = "
+static SELF_PLAY_MATCH_HELP_TEXT: &str = "
 Produce matches by self-play
 ";
 
@@ -50,20 +39,18 @@ struct Arguments {
 #[derive(Subcommand, Debug)]
 enum Verb {
     /// Producing matches
-    #[clap(after_help=PRODUCE_MATCH_HELP_TEXT)]
-    Produce {
-        /// tcp endpoint to connect to report results. e.g. tcp://127.0.0.1:2222
+    #[clap(after_help=SELF_PLAY_MATCH_HELP_TEXT)]
+    SelfPlay {
         #[clap(required = true)]
-        address: String,
+        model_file: String,
+
+        #[clap(required = true)]
+        export_dir: String,
     },
 
-    /// Exporting matches to dataset for training
+    /// Self play and train
     #[clap(after_help=TRAIN_HELP_TEXT)]
-    Train {
-        /// tcp port to listen on
-        #[clap(default_value_t = 55590)]
-        port: u16,
-    },
+    Train {},
 
     /// contest between two model
     #[clap()]
@@ -83,105 +70,21 @@ async fn main() {
     let args = Arguments::parse();
 
     match args.verb {
-        Some(Verb::Produce { address }) => {
-            println!("Connecting to {}", address);
-            let mut stream = TcpStream::connect(address)
-                .await
-                .expect("Unable to connect to trainer");
-            println!("Connection is established");
-            let (r, w) = stream.split();
+        Some(Verb::SelfPlay {
+            model_file,
+            export_dir,
+        }) => {
+            let mut trainer = Trainer::new();
 
-            let (mut producer, mut rx, latest_parameters) = DataProducer::new();
-
-            let mut join_handle = tokio::task::spawn_blocking(move || {
-                producer.run();
-            });
-
-            // send data set back to trainer
-            let mut output_stream = FramedWrite::new(w, LengthDelimitedCodec::new());
-
-            let mut input_stream = FramedRead::new(r, LengthDelimitedCodec::new());
-
-            loop {
-                tokio::select! {
-                    result = input_stream.next() => {
-                        match result {
-                            Some(read) => {
-                                match read {
-                                    Ok(data) => {
-                                        *latest_parameters.lock().unwrap() = Some(data.freeze());
-                                        //println!("Model parameters have been updated");
-                                    }
-                                    Err(e) => {
-                                        eprintln!("Connection is lost: {}", e);
-                                        return;
-                                    }
-                                }
-                            },
-                            None => {
-                                eprintln!("Connection is closed");
-                                return
-                            }
-                        }
-                    }
-                    option = rx.recv() => {
-                        match option {
-                            Some(item) => {
-                                let payload : Bytes = item.into();
-                                if let Err(e) = output_stream.send(payload).await {
-                                    eprintln!("Failed to send data back to trainer. {}", e);
-                                    return;
-                                }
-                            },
-                            None => {
-                                eprintln!("Channel is closed");
-                                return
-                            }
-                        }
-                    }
-                    _ = &mut join_handle => {
-                        println!("Data producer exited");
-                        return;
-                    }
-                }
-            }
+            trainer
+                .produce_self_play_data(&model_file, &export_dir)
+                .await;
         }
 
-        Some(Verb::Train { port }) => {
-            let (train_data_tx, train_data_rx) = mpsc::unbounded_channel::<TrainDataItem>();
-            let (params_tx, params_rx) = watch::channel(Bytes::new());
-            // start tcp server, payload_tx is used to broadcast model parameters
-            let mut server = TcpServer::start(port, train_data_tx, params_rx)
-                .await
-                .expect("Unable to start TCP server");
-
-            let number = if num_cpus::get() > 2 {
-                num_cpus::get() - 2
-            } else {
-                1
-            };
-            let address = format!("127.0.0.1:{}", port);
-            let mut children = Vec::with_capacity(number);
-            for _ in 0..number {
-                let child = start_child_process(vec!["produce", &address])
-                    .expect("Unable to start child process");
-                children.push(child);
-            }
-
-            let _join_handle = tokio::spawn(async move {
-                let mut trainer = Trainer::new(params_tx, train_data_rx);
-                trainer.run().await;
-            });
-
-            // TODO : multiple wait
-            server.run().await.expect("Unable to accept connection");
-            drop(children);
+        Some(Verb::Train {}) => {
+            let mut trainer = Trainer::new();
+            trainer.run().await;
         }
-
-        Some(Verb::Contest {
-            old_model,
-            new_model,
-        }) => contest::run(&old_model, &new_model),
 
         _ => {
             tauri::Builder::default()
@@ -194,6 +97,7 @@ async fn main() {
     println!("Exiting...");
 }
 
+/*
 fn start_child_process(parameters: Vec<&str>) -> std::io::Result<Child> {
     let path = std::env::current_exe()?;
     let app_path = path.display().to_string();
@@ -303,7 +207,7 @@ impl TcpServer {
         }
     }
 }
-
+ */
 #[tauri::command]
 async fn new_match(window: tauri::Window, black: bool) {
     let board_info = human::start_new_match(black).await;

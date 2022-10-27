@@ -1,13 +1,18 @@
-use crate::game::{RenjuBoard, SquareMatrix, TerminalState};
+use crate::game::{RenjuBoard, SquareMatrix, StateTensor, TerminalState, BOARD_SIZE};
 
-use crate::model::{OnDeviceModel, RenjuModel};
-use crate::player::AiPlayer;
+use crate::mcts::MonteCarloTree;
+use crate::model::TfLiteModel;
+
+use crossbeam::atomic::AtomicCell;
 
 use std::sync::atomic::Ordering;
 use tokio::sync::RwLock;
 
+use std::cell::RefCell;
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use tokio::task::JoinHandle;
+
+use rand::seq::SliceRandom;
 
 static SINGLETON: Mutex<Option<Arc<RwLock<HumanVsMachineMatch>>>> = Mutex::new(None);
 
@@ -27,6 +32,12 @@ fn get_match() -> Arc<RwLock<HumanVsMachineMatch>> {
         return x.clone();
     }
     unreachable!()
+}
+
+pub async fn get_state() -> MatchState {
+    let instance = get_match();
+    let lock = instance.read().await;
+    lock.get_board().get_state()
 }
 
 pub async fn human_move(pos: (usize, usize)) -> BoardInfo {
@@ -55,7 +66,7 @@ pub enum MatchState {
     MachineWon,
 }
 pub struct HumanVsMachineMatch {
-    ai_player: Arc<AiPlayer<OnDeviceModel>>,
+    ai_player: Arc<AiPlayer>,
     board: RenjuBoard,
     human_play_black: bool,
     state: MatchState,
@@ -87,10 +98,8 @@ impl BoardInfo {
 
 impl HumanVsMachineMatch {
     pub async fn new(human_play_black: bool) -> Arc<RwLock<Self>> {
-        let model = OnDeviceModel::load("renju_15x15_model").expect("Unable to load saved model");
-
-        let ai_player = AiPlayer::new(model, 0 /*we will rollout manually */);
-        let max_threads = (num_cpus::get() - 2).max(1);
+        let ai_player = AiPlayer::new();
+        let max_threads = 1; //(num_cpus::get() - 0).max(1);
         let instance = Arc::new(RwLock::new(Self {
             ai_player: Arc::new(ai_player),
             board: RenjuBoard::default(),
@@ -123,20 +132,18 @@ impl HumanVsMachineMatch {
             stones: self.board.get_stones(),
             state: self.state,
             last: self.board.get_last_move(),
-            visited: self.ai_player.get_visit_times(),
+            visited: self.ai_player.get_visit_time_matrix(),
         }
     }
 
-    async fn think<T>(
+    async fn think(
         board: RenjuBoard,
         choices: Vec<(usize, usize)>,
         thinking: Arc<AtomicBool>,
-        ai_player: Arc<AiPlayer<T>>,
-    ) where
-        T: RenjuModel + Send,
-    {
+        ai_player: Arc<AiPlayer>,
+    ) {
         while thinking.load(Ordering::SeqCst) {
-            ai_player.rollout(board.clone(), &choices).await;
+            ai_player.think(board.clone(), &choices).await;
         }
     }
 
@@ -239,5 +246,102 @@ impl HumanVsMachineMatch {
         }
 
         state
+    }
+}
+
+// each thread creates a dedicated model
+thread_local!(static MODEL: RefCell<Option<TfLiteModel>> = RefCell::new(None));
+
+pub struct AiPlayer {
+    tree: MonteCarloTree,
+    // temperature parameter in (0, 1] controls the level of exploration
+    temperature: f32,
+    visit_time_matrix: AtomicCell<SquareMatrix<u32>>,
+}
+
+impl AiPlayer {
+    pub fn get_visit_time_matrix(self: &Self) -> SquareMatrix<u32> {
+        self.visit_time_matrix.load()
+    }
+    pub fn new() -> Self {
+        let tree = MonteCarloTree::new(3f32);
+        Self {
+            tree: tree,
+            temperature: 1e-3,
+            visit_time_matrix: AtomicCell::new(SquareMatrix::default()),
+        }
+    }
+
+    pub async fn think(self: &Self, board: RenjuBoard, choices: &Vec<(usize, usize)>) {
+        self.tree
+            .rollout(board, choices, |state_tensor: StateTensor| {
+                MODEL.with(|ref_cell| {
+                    let mut model = ref_cell.borrow_mut();
+                    if model.is_none() {
+                        *model = Some(
+                            TfLiteModel::load("best.tflite").expect("Unable to load saved model"),
+                        )
+                    }
+                    model
+                        .as_ref()
+                        .unwrap()
+                        .predict_one(state_tensor)
+                        .expect("Unable to predict_one")
+                })
+            })
+            .await
+            .expect("rollout failed")
+    }
+
+    pub async fn do_next_move(
+        self: &Self,
+        board: &RenjuBoard,
+        choices: &Vec<(usize, usize)>,
+    ) -> (usize, usize) {
+        let pos = if choices.len() == 1 {
+            choices[0]
+        } else {
+            let move_prob_pairs: Vec<((usize, usize), f32)> = self
+                .tree
+                .get_move_probability(self.temperature)
+                .await
+                .expect("get_move_probability() failed");
+
+            match board.get_stones() {
+                1..=2 if board.get_matrix()[BOARD_SIZE / 2][BOARD_SIZE / 2] == 1 => {
+                    move_prob_pairs.choose(&mut rand::thread_rng()).unwrap().0
+                }
+                _ => {
+                    let pair = move_prob_pairs
+                        .into_iter()
+                        .max_by(|(_, left_score), (_, right_score)| {
+                            left_score
+                                .partial_cmp(right_score)
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                        .expect("At least one pair");
+                    pair.0
+                }
+            }
+        };
+
+        let visit_time_matrix = self
+            .tree
+            .get_visit_times()
+            .await
+            .expect("get_visit_times() failed");
+        self.visit_time_matrix.store(visit_time_matrix);
+        self.tree
+            .update_with_position(pos)
+            .await
+            .expect("update_with_position() failed");
+        pos
+    }
+
+    pub async fn notify_opponent_moved(self: &Self, _: &RenjuBoard, pos: (usize, usize)) {
+        self.tree
+            .update_with_position(pos)
+            .await
+            .expect("update_with_position failed");
     }
 }

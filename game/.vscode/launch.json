@@ -46,7 +46,7 @@
             },
             "args": [],
             "env": {
-                "DYLD_LIBRARY_PATH": "/opt/homebrew/opt/tensorflow/lib"
+                "DYLD_LIBRARY_PATH": "/opt/homebrew/opt/tensorflow/lib:/Users/jerry/projects/renju/renju.git/game"
             },
             "cwd": "${workspaceFolder}"
         },
