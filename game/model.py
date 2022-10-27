@@ -379,33 +379,10 @@ with open("latest.weights", mode='rb') as file:
 
 with open("latest.weights", mode='rb') as file:
     buffer = file.read()
-    #import_parameters(buffer)
+    import_parameters(buffer)
     obj = pickle.loads(buffer)
 
-    for layer in renju.model.layers:
-        if layer.name == 'resblocks':
-            child = obj[layer.name]
-            for sublayer in layer.layers:
-                for subsublayer in sublayer.layers:
-                    if subsublayer.name in child:
-                        subsublayer.set_weights(child[subsublayer.name])
-                    else:
-                        weights = subsublayer.get_weights()
-                        for array1 in weights:
-                            for array2 in array1:
-                                for array3 in array2:
-                                    for index in range(len(array3)):
-                                        array3[index] = 0.1
-                        subsublayer.set_weights(weights)
-        else:
-            if obj[layer.name]:
-                layer.set_weights(obj[layer.name])
-        #if obj[layer.name]:
-        #   layer.set_weights(obj[layer.name])
-    
-    #with open('latest.weights', 'wb') as handle:
-    #    pickle.dump( renju.model.get_weights(), handle, protocol=pickle.HIGHEST_PROTOCOL)
-save_quantized_model('best.tflite')
+#save_quantized_model('best.tflite')
 
 
 """
