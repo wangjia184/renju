@@ -6,7 +6,6 @@ use crate::model::TfLiteModel;
 use crossbeam::atomic::AtomicCell;
 
 use std::sync::atomic::Ordering;
-use tokio::sync::{Mutex, RwLock};
 
 use rand::seq::SliceRandom;
 use std::cell::RefCell;
@@ -15,7 +14,6 @@ use tokio::sync::oneshot::{self, Receiver};
 use tokio::task::JoinHandle;
 
 lazy_static! {
-    static ref SINGLETON: Mutex<Option<Arc<RwLock<HumanVsMachineMatch>>>> = Mutex::new(None);
     static ref SINGLETON_CHANNEL: AtomicCell<Receiver<HumanVsMachineMatch>> = {
         let instance = HumanVsMachineMatch::new(true);
         let (tx, rx) = oneshot::channel();
