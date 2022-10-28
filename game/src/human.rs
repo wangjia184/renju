@@ -235,7 +235,7 @@ impl AiPlayer {
         self.visit_time_matrix.load()
     }
     pub fn new() -> Self {
-        let tree = MonteCarloTree::new(3f32);
+        let tree = MonteCarloTree::new(5f32);
         Self {
             tree: tree,
             temperature: 1e-3,
