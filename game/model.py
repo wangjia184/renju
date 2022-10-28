@@ -36,7 +36,7 @@ def create_model(board_width, board_height):
 
             self.bn1 = tf.keras.layers.BatchNormalization()
 
-            self.relu1 = tf.keras.layers.LeakyReLU(alpha=0.1)
+            self.relu1 = tf.keras.layers.PReLU()
 
             self.conv2 = tf.keras.layers.Conv2D(filters, 
                 kernel_size=(3, 3), 
@@ -46,7 +46,7 @@ def create_model(board_width, board_height):
                 padding='same')
             self.bn2 = tf.keras.layers.BatchNormalization()
             
-            self.relu = tf.keras.layers.LeakyReLU(alpha=0.1)
+            self.relu = tf.keras.layers.PReLU()
         def call(self, input):
             shortcut = self.shortcut(input)
 
@@ -117,7 +117,7 @@ def create_model(board_width, board_height):
 
             self.action_bn = tf.keras.layers.BatchNormalization(name="action_bn")(self.action_conv)
 
-            self.action_act = tf.keras.layers.LeakyReLU(0.1, name="action_activation")(self.action_bn)
+            self.action_act = tf.keras.layers.PReLU(name="action_activation")(self.action_bn)
 
             # flatten tensor
             self.action_conv_flat = tf.keras.layers.Flatten(name="action_flatten")(self.action_act)
@@ -141,7 +141,7 @@ def create_model(board_width, board_height):
 
             self.evaluation_bn = tf.keras.layers.BatchNormalization(name="evaluation_bn")(self.evaluation_conv)
 
-            self.evaluation_act = tf.keras.layers.LeakyReLU(0.1, name="evaluation_activation")(self.evaluation_bn)
+            self.evaluation_act = tf.keras.layers.PReLU(name="evaluation_activation")(self.evaluation_bn)
 
             self.evaluation_conv_flat = tf.keras.layers.Flatten(name="evaluation_flatten")(self.evaluation_act)
 
@@ -356,10 +356,33 @@ def to_list(x):
             ls[idx] = to_list(sub)
     return ls
 
+
+"""
 with open("latest.weights", mode='rb') as file:
     buffer = file.read()
     import_parameters(buffer)
-save_quantized_model('best.tflite')
+    obj = {}
+    for layer in renju.model.layers:
+        if layer.name == 'resblocks':
+            child = {}
+            for sublayer in layer.layers:
+                for subsublayer in sublayer.layers:
+                    child[subsublayer.name] = subsublayer.get_weights()
+            obj[layer.name] = child
+        else:
+            obj[layer.name] = layer.get_weights()
+        #if obj[layer.name]:
+        #   layer.set_weights(obj[layer.name])
+    with open('latest.weights', 'wb') as handle:
+        pickle.dump( obj, handle, protocol=pickle.HIGHEST_PROTOCOL)
+"""
+
+with open("latest.weights", mode='rb') as file:
+    buffer = file.read()
+    import_parameters(buffer)
+    obj = pickle.loads(buffer)
+
+#save_quantized_model('best.tflite')
 
 
 """

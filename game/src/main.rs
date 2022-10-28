@@ -4,6 +4,8 @@
 )]
 extern crate clap;
 extern crate num_cpus;
+#[macro_use]
+extern crate lazy_static;
 
 use clap::{Parser, Subcommand};
 
@@ -97,147 +99,44 @@ async fn main() {
     println!("Exiting...");
 }
 
-/*
-fn start_child_process(parameters: Vec<&str>) -> std::io::Result<Child> {
-    let path = std::env::current_exe()?;
-    let app_path = path.display().to_string();
-    println!("{} {}", app_path, parameters.join(" "));
-    let child = Command::new(&app_path)
-        .args(parameters)
-        //.stdin(Stdio::piped())
-        //.stdout(Stdio::piped())
-        //.stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()?;
-
-    let _pid = child.id().expect("child did not have a id");
-
-    Ok(child)
-}
-
-struct TcpServer {
-    listener: TcpListener,
-    data_sender: UnboundedSender<TrainDataItem>,
-    payload_receiver: Receiver<Bytes>,
-}
-
-impl TcpServer {
-    pub async fn start(
-        port: u16,
-        train_data_tx: UnboundedSender<TrainDataItem>,
-        payload_rx: Receiver<Bytes>,
-    ) -> std::io::Result<Self> {
-        let address = format!("0.0.0.0:{}", port);
-        let listener = TcpListener::bind(&address).await?;
-
-        Ok(Self {
-            listener: listener,
-            data_sender: train_data_tx,
-            payload_receiver: payload_rx,
-        })
-    }
-
-    pub async fn run(self: &mut Self) -> std::io::Result<()> {
-        loop {
-            let (socket, _) = self.listener.accept().await?;
-            let rx = self.payload_receiver.clone();
-            let tx = self.data_sender.clone();
-            tokio::spawn(async move {
-                TcpServer::process(socket, rx, tx).await;
-            });
-        }
-    }
-
-    async fn process(
-        mut stream: TcpStream,
-        mut rx: Receiver<Bytes>,
-        tx: UnboundedSender<TrainDataItem>,
-    ) {
-        let (r, w) = stream.split();
-        let mut output_stream = FramedWrite::new(w, LengthDelimitedCodec::new());
-
-        // send latest model parameters
-        let payload = rx.borrow().clone();
-        output_stream.send(payload).await.expect("Failed to send");
-
-        let mut input_stream = FramedRead::new(r, LengthDelimitedCodec::new());
-        loop {
-            tokio::select! {
-                result = input_stream.next() => {
-                    match result {
-                        Some(read) => {
-                            match read {
-                                Ok(data) => {
-                                    let item = TrainDataItem::from(data.freeze());
-                                    if let Err(e) = tx.send(item) {
-                                        eprintln!("Failed to forward data item. {}", e);
-                                        return;
-                                    }
-                                }
-                                Err(e) => {
-                                    eprintln!("Connection is lost: {}", e);
-                                    return;
-                                }
-                            }
-                        }
-                        None => {
-                            println!("Connection is closed");
-                            return;
-                        }
-                    }
-                }
-
-                // Waits for a change notification, then marks the newest value as seen.
-                status = rx.changed() => {
-                    match status {
-                        Ok(_) => {
-                            let payload = rx.borrow().clone();
-                            if let Err(e) = output_stream.send(payload).await {
-                                eprintln!("Unable to send payload. {}", e);
-                                return;
-                            }
-                        },
-                        Err(e) => {
-                            eprintln!("Unexpected error. {}", e);
-                            return;
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
- */
 #[tauri::command]
 async fn new_match(window: tauri::Window, black: bool) {
-    let board_info = human::start_new_match(black).await;
-
-    window.emit("board_updated", board_info).unwrap();
+    let window_ref = &window;
+    human::access(|mut m| async move {
+        m.restart(black).await;
+        window_ref.emit("board_updated", m.get_board()).unwrap();
+        m
+    })
+    .await;
 }
 
 #[tauri::command]
 async fn do_move(window: tauri::Window, pos: (usize, usize)) -> MatchState {
-    let board_info = human::human_move(pos).await;
+    let window_ref = &window;
+    human::access(|mut m| async move {
+        let state = m.human_move(pos).await;
 
-    let state = board_info.get_state();
+        let bi = m.get_board();
+        let seconds = match bi.get_stones() {
+            0..=3 => 3,
+            4..=6 => 7,
+            7..=14 => 10,
+            _ => 12,
+        };
+        window_ref.emit("board_updated", bi).unwrap();
 
-    let seconds = match board_info.get_stones() {
-        0..=3 => 3,
-        4..=6 => 7,
-        7..=14 => 10,
-        _ => 12,
-    };
+        if state != MatchState::HumanWon
+            && state != MatchState::Draw
+            && state != MatchState::MachineWon
+        {
+            sleep(Duration::from_secs(seconds)).await;
 
-    window.emit("board_updated", board_info).unwrap();
+            m.machine_move().await;
 
-    if state != MatchState::HumanWon && state != MatchState::Draw && state != MatchState::MachineWon
-    {
-        sleep(Duration::from_secs(seconds)).await;
+            window_ref.emit("board_updated", m.get_board()).unwrap();
+        }
 
-        let board_info = human::machine_move().await;
-
-        window.emit("board_updated", board_info).unwrap();
-    }
-
-    state
+        m
+    })
+    .await
 }
