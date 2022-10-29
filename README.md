@@ -38,7 +38,9 @@ It has been simplified and modified in this application:
     * The second plane represents the stone position of opponent player
     * The third plane represents the position of last move
     * The fourth plane are filled with ones if current player is black; or zeros if white.
-5. Loss function $$ l = {(z-v)^{2}-\pi ^{T}ln(p)+c\left \| \theta  \right \|^{2}} $$
+5. Loss function
+
+ $$ l = (z-v)^{2}-\pi ^{T}ln(p)+c\left \|\| \theta  \right \|\|^{2} $$
 
 Here comes the model graph
 
