@@ -1,4 +1,6 @@
-# A reinforcement-learning based Renju game
+# A Reinforcement-Learning based Renju game
+
+This is my personal project to practice reinforcement learning. You can download the application and play with it.
 
 Renju is a professional variant of gomoku(five in a row) by adding following restrictions to black stones to weaken the advantages of the first player in the game. 
 
@@ -6,9 +8,7 @@ Renju is a professional variant of gomoku(five in a row) by adding following res
 * Double four – Black cannot place a stone that builds two separate lines with four black stones in a row.
 * Overline – six or more black stones in a row.
 
-![](./ui.png)
-
-This is my personal project to practice reinforcement learning. You can download the application and play with it.
+![User Interface](./ui.png)
 
 ## Overview
 
@@ -23,6 +23,19 @@ This is my personal project to practice reinforcement learning. You can download
 
 ## CNN
 
+The following graph shows the CNN in AlphaGo Zero.
+
+![Alpha Zero](./alphazero.png)
+
+It has been simplified and modified in this application:
+
+1. Number of residual blocks is reduced from 39 to 19.
+2. Residual block width is narrowed from 256 filters down to 32 filters.
+3. Since width is reduced to 1/8 and dying ReLU problem was encountered in first attempt, hence activation function ReLU is replaced with PReLU and ELU.
+
+Here comes the model graph
+
+![Model](./model.png)
 
 
 
