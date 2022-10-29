@@ -1,6 +1,4 @@
-https://joshvarty.github.io/AlphaZero/
-https://jonathan-hui.medium.com/alphago-zero-a-game-changer-14ef6e45eba5
-https://jonathan-hui.medium.com/alphago-how-it-works-technically-26ddcc085319
+
 
 ```
 sudo mkdir -p /usr/local/lib/libtensorflow-cpu-darwin-arm64-2.9.0
@@ -22,4 +20,13 @@ Mac M1
 pip3 install tensorflow-macos
 pip3 install tensorflow-metal
 pip3 install tensorflow_probability
+
+```
+
+https://github.com/tensorflow/tflite-support/issues/755#issuecomment-1060998000ls
+
+```
+bazel build -c opt tensorflow_lite_support/tools/pip_package:build_pip_package
+
+./bazel-bin/tensorflow_lite_support/tools/pip_package/build_pip_package --dst wheels --nightly_flag
 ```
