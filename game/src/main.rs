@@ -31,11 +31,13 @@ mod game;
 mod human;
 mod mcts;
 mod model;
+#[cfg(feature="train")]
 mod selfplay;
 use human::MatchState;
+#[cfg(feature="train")]
 use selfplay::Trainer;
 
-static ABOUT_TEXT: &str = "Renju game ";
+static ABOUT_TEXT: &str = "Renju Game";
 
 static SELF_PLAY_MATCH_HELP_TEXT: &str = "
 Produce matches by self-play
@@ -65,21 +67,12 @@ enum Verb {
         export_dir: String,
     },
 
+    #[cfg(feature="train")]
     /// Self play and train
     #[clap(after_help=TRAIN_HELP_TEXT)]
     Train {},
 
-    /// contest between two model
-    #[clap()]
-    Contest {
-        /// old model name
-        #[clap(required = true)]
-        old_model: String,
 
-        /// new model name
-        #[clap(required = true)]
-        new_model: String,
-    },
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -87,6 +80,7 @@ async fn main() {
     let args = Arguments::parse();
 
     match args.verb {
+        #[cfg(feature="train")]
         Some(Verb::SelfPlay {
             model_file,
             export_dir,
@@ -98,6 +92,7 @@ async fn main() {
                 .await;
         }
 
+        #[cfg(feature="train")]
         Some(Verb::Train {}) => {
             let mut trainer = Trainer::new();
             trainer.run().await;

@@ -48,7 +48,7 @@ impl From<u8> for Color {
 }
 
 impl From<f32> for Color {
-    fn from(v: f32) -> Self {
+    fn from(_v: f32) -> Self {
         unimplemented!()
     }
 }

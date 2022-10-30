@@ -21,12 +21,15 @@ use crate::model::TfLiteModel;
 use crossbeam::atomic::AtomicCell;
 
 use std::sync::atomic::Ordering;
-
+use std::include_bytes;
 use rand::seq::SliceRandom;
 use std::cell::RefCell;
 use std::sync::{atomic::AtomicBool, Arc};
 use tokio::sync::oneshot::{self, Receiver};
 use tokio::task::JoinHandle;
+use tempfile::{tempdir, TempDir};
+use std::fs::File;
+use std::io::prelude::*;
 
 lazy_static! {
     static ref SINGLETON_CHANNEL: AtomicCell<Receiver<HumanVsMachineMatch>> = {
@@ -36,6 +39,19 @@ lazy_static! {
             unreachable!();
         }
         AtomicCell::new(rx)
+    };
+
+    static ref MODEL_FILE : (String, TempDir) = {
+        let mut dir = tempdir().expect("Unable to create template file");
+        let filename = dir.path().join("model.tflite").display().to_string();
+        println!("{}", &filename);
+    
+        let mut file = File::create(&filename).expect("Unable to create temp file");
+
+        let bytes = include_bytes!("../best.tflite");
+        file.write_all(bytes).expect("Unable to save model to file");
+        file.flush().expect("Unable to flush model to file");
+        ( filename, dir )
     };
 }
 
@@ -96,7 +112,7 @@ impl BoardInfo {
 impl HumanVsMachineMatch {
     fn new(human_play_black: bool) -> Self {
         let ai_player = AiPlayer::new();
-        let max_threads = 2; //(num_cpus::get() - 0).max(1);
+        let max_threads = 1; //(num_cpus::get() - 0).max(1);
         Self {
             ai_player: Arc::new(ai_player),
             board: RenjuBoard::default(),
@@ -268,27 +284,26 @@ impl AiPlayer {
         choices: &Vec<(usize, usize)>,
     ) {
         self.tree
-            .rollout(
-                breadth_first,
-                board,
-                choices,
-                |state_tensor: StateTensor| {
-                    MODEL.with(|ref_cell| {
-                        let mut model = ref_cell.borrow_mut();
-                        if model.is_none() {
-                            *model = Some(
-                                TfLiteModel::load("best.tflite")
-                                    .expect("Unable to load saved model"),
-                            )
-                        }
-                        model
-                            .as_ref()
-                            .unwrap()
-                            .predict_one(state_tensor)
-                            .expect("Unable to predict_one")
-                    })
-                },
-            )
+            .rollout(breadth_first, board, choices, |state_tensor: StateTensor| {
+                MODEL.with(|ref_cell| {
+                    let mut model = ref_cell.borrow_mut();
+                    if model.is_none() {
+                        #[cfg(feature="train")]
+                        let filepath = "best.tflite";
+
+                        #[cfg(not(feature="train"))]
+                        let filepath = &MODEL_FILE.0;
+                        *model = Some(
+                            TfLiteModel::load(filepath).expect("Unable to load model"),
+                        )
+                    }
+                    model
+                        .as_ref()
+                        .unwrap()
+                        .predict_one(state_tensor)
+                        .expect("Unable to predict_one")
+                })
+            })
             .await
             .expect("rollout failed")
     }

@@ -21,7 +21,7 @@ serde_json = "1.0"
 serde-pickle = "1.1.1"
 serde = { version = "1.0.144", features = ["derive"] }
 tauri = { version = "1.1.1", features = ["api-all"] }
-pyo3 = { version = "0.17.1", features = [] }
+tempfile = "3.3.0"
 num_cpus = "1.13.1"
 crossbeam = "0.8.2"
 flume = "0.10.14"
@@ -30,6 +30,8 @@ tflitec = { version = "0.5.1", features = ["xnnpack"] }
 rand = "0.8.5"
 rand_distr = "0.4.3"
 probability = "0.18.0"
+
+pyo3 = { version = "0.17.1", features = [],  optional = true }
 
 [dependencies.uuid]
 version = "1.1.2"
@@ -41,16 +43,9 @@ features = [
 
 
 [build-dependencies]
-tauri-build = { version = "1.1.1" }
+tauri-build = { version = "1.1.1", features = [] }
 copy_to_output = "2.0.0"
 
-[features]
-# by default Tauri runs in production mode
-# when `tauri dev` runs it is executed with `cargo run --no-default-features` if `devPath` is an URL
-default = ["custom-protocol"]
-# this feature is used used for production builds where `devPath` points to the filesystem
-# DO NOT remove this
-custom-protocol = ["tauri/custom-protocol"]
 
 
 # BLAS source choices:
@@ -70,8 +65,19 @@ blas-src = { version = "0.8.0", default-features = false, features = [
 ndarray = { version = "0.15.6" }
 
 
-#[profile.release]
-#strip = true      # Automatically strip symbols from the binary.
-#opt-level = "z"   # Optimize for size.
-#lto = true
-#codegen-units = 1
+[profile.release]
+strip = true      # Automatically strip symbols from the binary.
+opt-level = "z"   # Optimize for size.
+lto = true
+codegen-units = 1
+
+
+
+[features]
+# by default Tauri runs in production mode
+# when `tauri dev` runs it is executed with `cargo run --no-default-features` if `devPath` is an URL
+default = ["custom-protocol"]
+# this feature is used used for production builds where `devPath` points to the filesystem
+# DO NOT remove this
+custom-protocol = ["tauri/custom-protocol"]
+train = [ "dep:pyo3" ]

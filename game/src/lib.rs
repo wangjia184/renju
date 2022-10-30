@@ -20,4 +20,5 @@ pub mod model;
 
 pub use game::{RenjuBoard, SquareMatrix, SquaredMatrixExtension, StateTensor, TerminalState};
 pub use mcts::{MonteCarloTree, TreeNode};
+#[cfg(feature="train")]
 pub use model::PolicyValueModel;

@@ -15,9 +15,13 @@
  */
 use bytes::Bytes;
 use num_cpus;
+#[cfg(feature="train")]
 use pyo3::prelude::*;
+#[cfg(feature="train")]
 use pyo3::types::{PyBytes, PyList, PyTuple};
+#[cfg(feature="train")]
 use std::fs::OpenOptions;
+#[cfg(feature="train")]
 use std::io::prelude::*;
 
 use tflitec::interpreter::{Interpreter, Options};
@@ -25,11 +29,12 @@ use tflitec::tensor;
 
 use crate::game::*;
 
+#[cfg(feature="train")]
 pub struct PolicyValueModel {
     module: Py<PyModule>,
 }
 
-//
+#[cfg(feature="train")]
 impl PolicyValueModel {
     pub fn new(filename: &str) -> PyResult<Self> {
         let mut source_code = String::new();
@@ -185,7 +190,7 @@ impl TfLiteModel {
     pub fn load(tflite_model_path: &str) -> Result<Self, tflitec::Error> {
         // Create interpreter options
         let mut options = Options::default();
-        options.thread_count = num_cpus::get() as i32 / 2;
+        options.thread_count = (num_cpus::get() as i32 - 2).max(1);
         options.is_xnnpack_enabled = true;
         println!("is_xnnpack_enabled={}", options.is_xnnpack_enabled);
 
