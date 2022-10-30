@@ -14,10 +14,6 @@
  * limitations under the License.
  */
 
-// A lockless parallel Monte-Carlo Tree Search
-// The unobserved_times parameter is inspired by the added O parameter in paper https://arxiv.org/abs/1810.11755
-// <<Watch the Unobserved: A Simple Approach to Parallelizing Monte Carlo Tree Search>>
-
 use crate::game::{RenjuBoard, SquareMatrix, StateTensor, TerminalState};
 use crossbeam::atomic::AtomicCell;
 use std::collections::HashMap;
@@ -36,6 +32,7 @@ pub struct TreeNode {
     children: HashMap<(usize /*row*/, usize /*col*/), Arc<AtomicCell<Receiver<Self>>>>,
     visit_times: u32, // number of visited times
     probability: f32, // prior probability from policy network
+    breadth_first_visit_times: u32,
 
     // UCB is based on the principle of “optimism in the fact of uncertainty”,
     // which basically means if you don’t know which action is best
@@ -89,7 +86,7 @@ struct TreeNodeChildren {
 
 impl TreeNodeChildren {
     /// Select a direct child with max UCB(Q+U)
-    async fn select(self: &Self, depth: usize, c_puct: f32) -> Result<OpenedTreeNode, RecvError> {
+    async fn select(self: &Self, c_puct: f32) -> Result<OpenedTreeNode, RecvError> {
         let mut selected: Option<OpenedTreeNode> = None;
         let mut max_score = f32::MIN;
 
@@ -99,13 +96,40 @@ impl TreeNodeChildren {
 
             let score = child_node
                 .get()
-                .compute_score(depth <= 1, c_puct, self.parent_visit_times);
+                .compute_score(c_puct, self.parent_visit_times);
             if score > max_score {
                 max_score = score;
                 selected = Some(child_node);
             }
         }
         assert!(selected.is_some());
+        Ok(selected.unwrap())
+    }
+
+    async fn breadth_first_select(self: &Self, c_puct: f32) -> Result<OpenedTreeNode, RecvError> {
+        let mut selected: Option<OpenedTreeNode> = None;
+        let mut min_times = u32::MAX;
+
+        // order is important here. be careful to avoid dead lock
+        for (_, child) in &self.pairs {
+            let child_node = TreeNode::open_node(child).await?;
+
+            let visit_times = child_node.get().breadth_first_visit_times;
+            if visit_times < min_times {
+                min_times = visit_times;
+                selected = Some(child_node);
+
+                if visit_times == u32::MIN {
+                    break;
+                }
+            }
+        }
+        assert!(selected.is_some());
+        selected
+            .as_mut()
+            .unwrap()
+            .get_mut()
+            .breadth_first_visit_times += 1;
         Ok(selected.unwrap())
     }
 }
@@ -125,6 +149,7 @@ impl TreeNode {
             visit_times: 0,
             probability: prob,
             q: 0f32,
+            breadth_first_visit_times: 0,
         };
         if let Err(_) = tx.send(child) {
             panic!("tx.send(child) failed");
@@ -154,6 +179,7 @@ impl TreeNode {
             visit_times: 0,
             probability: 0f32,
             q: 0f32,
+            breadth_first_visit_times: 0,
         };
         init(&mut child);
 
@@ -205,19 +231,11 @@ impl TreeNode {
     // Calculate and return the value for this node.
     // It is a combination of leaf evaluations Q, and this node's prior adjusted for its visit count, u.
     // c_puct: a number in (0, inf) controlling the relative impact of value Q, and prior probability P, on this node's score.
-    fn compute_score(
-        self: &Self,
-        breadth_first: bool,
-        c_puct: f32,
-        parent_visit_times: u32,
-    ) -> f32 {
+    fn compute_score(self: &Self, c_puct: f32, parent_visit_times: u32) -> f32 {
         // The second half of the equation adds exploration,
         // with the degree of exploration being controlled by the hyper-parameter ‘c’.
         // Effectively this part of the equation provides a measure of the uncertainty for the action’s reward estimate.
         // u = visit-count-adjusted prior score
-        if breadth_first && self.visit_times == 0 {
-            return f32::MAX;
-        }
         let u = c_puct * self.probability * f32::sqrt(parent_visit_times as f32)
             / (1f32 + self.visit_times as f32);
         return self.q + u;
@@ -245,17 +263,38 @@ impl TreeNode {
 
         let mut current_node = Self::open_node(self_ref).await?;
 
-        let mut depth = 1;
         loop {
             if current_node.get().children.is_empty() {
                 break;
             } else {
                 let children = current_node.get().get_children();
-                //drop(current_node); //release parent node before select children
-                current_node = children.select(depth, c_puct).await?;
+                drop(current_node); //release parent node before select children
+                current_node = children.select(c_puct).await?;
 
                 moves.push(current_node.get().action.unwrap());
-                depth += 1;
+            }
+        }
+
+        Ok((current_node, moves))
+    }
+
+    async fn breadth_first_select_leaf(
+        self_ref: &Arc<AtomicCell<Receiver<Self>>>,
+        c_puct: f32,
+    ) -> Result<(OpenedTreeNode, Vec<(usize, usize)>), RecvError> {
+        let mut moves = Vec::with_capacity(20);
+
+        let mut current_node = Self::open_node(self_ref).await?;
+
+        loop {
+            if current_node.get().children.is_empty() {
+                break;
+            } else {
+                let children = current_node.get().get_children();
+                drop(current_node); //release parent node before select children
+                current_node = children.breadth_first_select(c_puct).await?;
+
+                moves.push(current_node.get().action.unwrap());
             }
         }
 
@@ -305,6 +344,7 @@ impl MonteCarloTree {
 
     pub async fn rollout<F>(
         self: &Self,
+        breadth_first: bool,
         mut board: RenjuBoard,
         choices: &Vec<(usize, usize)>,
         mut predict_fn: F,
@@ -314,7 +354,11 @@ impl MonteCarloTree {
     {
         let root = self.root.read().await.clone();
 
-        let (mut node, moves) = TreeNode::greedy_select_leaf(&root, self.c_puct).await?;
+        let (mut node, moves) = if breadth_first {
+            TreeNode::breadth_first_select_leaf(&root, self.c_puct).await?
+        } else {
+            TreeNode::greedy_select_leaf(&root, self.c_puct).await?
+        };
 
         //assert_eq!(board.get_last_move(), root.action);
 

@@ -1,3 +1,18 @@
+/*
+ * (C) Copyright 2022 Jerry.Wang (https://github.com/wangjia184).
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 use crate::game::{RenjuBoard, SquareMatrix, StateTensor, TerminalState, BOARD_SIZE};
 
 use crate::mcts::MonteCarloTree;
@@ -81,7 +96,7 @@ impl BoardInfo {
 impl HumanVsMachineMatch {
     fn new(human_play_black: bool) -> Self {
         let ai_player = AiPlayer::new();
-        let max_threads = 1; //(num_cpus::get() - 0).max(1);
+        let max_threads = 2; //(num_cpus::get() - 0).max(1);
         Self {
             ai_player: Arc::new(ai_player),
             board: RenjuBoard::default(),
@@ -124,20 +139,23 @@ impl HumanVsMachineMatch {
     }
 
     async fn think(
+        breadth_first: bool,
         board: RenjuBoard,
         choices: Vec<(usize, usize)>,
         thinking: Arc<AtomicBool>,
         ai_player: Arc<AiPlayer>,
     ) {
         while thinking.load(Ordering::SeqCst) {
-            ai_player.think(board.clone(), &choices).await;
+            ai_player
+                .think(breadth_first, board.clone(), &choices)
+                .await;
         }
     }
 
     async fn start_thinking(self: &mut Self) {
         self.thinking.store(true, Ordering::SeqCst);
 
-        for _ in 0..self.max_threads {
+        for index in 0..self.max_threads {
             let (board, choices, thinking, ai_player) = {
                 (
                     self.board.clone(),
@@ -148,7 +166,7 @@ impl HumanVsMachineMatch {
             };
 
             self.handles.push(tokio::spawn(async move {
-                Self::think(board, choices, thinking, ai_player).await;
+                Self::think(index > 0, board, choices, thinking, ai_player).await;
             }));
         }
     }
@@ -243,23 +261,34 @@ impl AiPlayer {
         }
     }
 
-    pub async fn think(self: &Self, board: RenjuBoard, choices: &Vec<(usize, usize)>) {
+    pub async fn think(
+        self: &Self,
+        breadth_first: bool,
+        board: RenjuBoard,
+        choices: &Vec<(usize, usize)>,
+    ) {
         self.tree
-            .rollout(board, choices, |state_tensor: StateTensor| {
-                MODEL.with(|ref_cell| {
-                    let mut model = ref_cell.borrow_mut();
-                    if model.is_none() {
-                        *model = Some(
-                            TfLiteModel::load("best.tflite").expect("Unable to load saved model"),
-                        )
-                    }
-                    model
-                        .as_ref()
-                        .unwrap()
-                        .predict_one(state_tensor)
-                        .expect("Unable to predict_one")
-                })
-            })
+            .rollout(
+                breadth_first,
+                board,
+                choices,
+                |state_tensor: StateTensor| {
+                    MODEL.with(|ref_cell| {
+                        let mut model = ref_cell.borrow_mut();
+                        if model.is_none() {
+                            *model = Some(
+                                TfLiteModel::load("best.tflite")
+                                    .expect("Unable to load saved model"),
+                            )
+                        }
+                        model
+                            .as_ref()
+                            .unwrap()
+                            .predict_one(state_tensor)
+                            .expect("Unable to predict_one")
+                    })
+                },
+            )
             .await
             .expect("rollout failed")
     }
