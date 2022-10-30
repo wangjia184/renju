@@ -12,9 +12,9 @@ Renju is a professional variant of gomoku(five in a row) by adding following res
 
 ## Overview
 
-* The game AI is implemented using residual Convolutional Neural Network and Monte Carlo Tree Search. 
+* AI is implemented using residual Convolutional Neural Network and Monte Carlo Tree Search. 
 * AI is not told how to play game. AI learns how to play the game by playing with itself (a.k.a Self Player).
-* Algorithm design is copied and modified from Alpha Go Zero 
+* Algorithm design is modified from Alpha Go Zero 
     * [AlphaGo: How it works technically?](https://jonathan-hui.medium.com/alphago-how-it-works-technically-26ddcc085319)
     * [AlphaZero - A step-by-step look at Alpha Zero and Monte Carlo Tree Search](https://joshvarty.github.io/AlphaZero/)
     * [AlphaGo Zero — a game changer. (How it works?)](https://jonathan-hui.medium.com/alphago-zero-a-game-changer-14ef6e45eba5)
@@ -29,14 +29,14 @@ The following graph shows the policy-value network from AlphaGo Zero.
 
 ![Alpha Zero](./alphazero.png)
 
-It has been simplified and modified in this application:
+It has been simplified here:
 
 1. Number of residual blocks is reduced from 39 to 19.
 2. Residual block width is narrowed from 256 filters down to 32 filters.
 3. Since width is reduced to 1/8 and dying ReLU problem was encountered in first attempt, hence activation function ReLU is replaced with PReLU and ELU.
-4. Input is simplified to a `(N, 4, 15, 15)` NCHW tensor with four 15x15 planes.
-    * The first plane represents the stone position of current player
-    * The second plane represents the stone position of opponent player
+4. Input is simplified to a `(1, 4, 15, 15)` NCHW tensor with four 15x15 planes.
+    * The first plane represents stones of current player
+    * The second plane represents stones of opponent player
     * The third plane represents the position of last move
     * The fourth plane are filled with ones if current player is black; or zeros if white.
 5. Loss function
