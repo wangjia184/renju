@@ -14,13 +14,18 @@ export DYLD_LIBRARY_PATH="$DYLD_LIBRARY_PATH":~/opt/anaconda3/envs/ml/lib/python
 
 
 
-Mac M1
 
+```
+pip3 install numpy
+pip3 install tensorflow
+pip3 install tensorflow_probability
+```
+
+
+Mac M1
 ```
 pip3 install tensorflow-macos
 pip3 install tensorflow-metal
-pip3 install tensorflow_probability
-
 ```
 
 https://github.com/tensorflow/tflite-support/issues/755#issuecomment-1060998000ls

@@ -47,9 +47,9 @@ impl Trainer {
     pub fn new() -> Self {
         Self {
             batch_size: 500,
-            parallel_num: 3, // parallel self-play matches for a single open pattern
+            parallel_num: 20, // parallel self-play matches for a single open pattern
             mcts_c_puct: 5f32,
-            mcts_iterations: 1000,
+            mcts_iterations: 400,
             epochs: 5,
             learn_rate: 1e-4,
             lr_multiplier: 3f32,
@@ -591,7 +591,7 @@ impl SelfPlayer {
     ) -> ((usize, usize), SquareMatrix) {
         for _ in 0..iterations {
             self.tree
-                .rollout(board.clone(), choices, |state_tensor: StateTensor| {
+                .rollout(false, board.clone(), choices, |state_tensor: StateTensor| {
                     MODEL.with(|ref_cell| {
                         let mut model = ref_cell.borrow_mut();
                         if model.is_none() {

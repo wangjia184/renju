@@ -43,11 +43,7 @@
       "windows": {
         "certificateThumbprint": null,
         "digestAlgorithm": "sha256",
-        "timestampUrl": "",
-        "webviewInstallMode": {
-          "type": "fixedRuntime",
-          "path": "./Microsoft.WebView2.FixedVersionRuntime.107.0.1418.24.x64/"
-        }
+        "timestampUrl": ""
       }
     },
     "security": {
