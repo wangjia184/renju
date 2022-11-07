@@ -11,8 +11,9 @@ import platform
 import tensorflow as tf
 import tensorflow_probability as tfp
 import tf2onnx
-import onnxruntime
-from onnxruntime.quantization import CalibrationDataReader, QuantFormat, QuantType, quantize_static
+
+from onnxruntime.quantization import CalibrationDataReader, QuantFormat, QuantType, quantize_static, shape_inference
+
 
 print( "platform: ", platform.platform() )
 print( "tensorflow version:", tf.__version__ )
@@ -22,7 +23,7 @@ print( "tensorflow_probability version:", tfp.__version__ )
 def create_model(board_width, board_height):
 
     l2_penalty_beta = 1e-4
-    data_format="channels_first"
+    data_format="channels_last"
 
     class ResBlock(tf.keras.Model):
         def __init__(self, filters):
@@ -369,21 +370,21 @@ class SampleInputDataReader(CalibrationDataReader):
         return None
 
 def convert_to_onnx_model(file_name):
-    save_quantized_model(file_name + '.tflite')
-    #spec = (tf.TensorSpec((1, 4, 15, 15), tf.float32, name="input"),)
-    #tf2onnx.convert.from_keras(renju.model, input_signature=spec, opset=17, output_path=file_name+".2")
-    tf2onnx.convert.from_tflite( file_name + '.tflite', output_path=file_name)
-    #dr = SampleInputDataReader()
-    #quantize_static(
-    #    file_name+".2",
-    #    file_name,
-    #    dr,
-    #    quant_format=QuantFormat.QDQ,
-    #    per_channel=False,
-    #    activation_type=QuantType.QInt8,
-    #    weight_type=QuantType.QInt8,
-    #    optimize_model=False,
-    #)
+    spec = (tf.TensorSpec((1, 4, 15, 15), tf.float32, name="input"),)
+    tf2onnx.convert.from_keras( renju.model, input_signature=spec, opset=17, output_path=file_name+".raw")
+    shape_inference.quant_pre_process( input_model_path=file_name+".raw", output_model_path=file_name+".preprocessed")
+    dr = SampleInputDataReader()
+    quantize_static(
+        file_name+".preprocessed",
+        file_name,
+        dr,
+        quant_format=QuantFormat.QDQ,
+        per_channel=False,
+        activation_type=QuantType.QInt8,
+        weight_type=QuantType.QInt8,
+        optimize_model=False,
+    )
+
 #convert_to_onnx_model("test.onnx")
 
 

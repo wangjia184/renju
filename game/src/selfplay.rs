@@ -51,7 +51,7 @@ pub struct DataSet {
 impl Trainer {
     pub fn new() -> Self {
         Self {
-            batch_size: 500,
+            batch_size: 1000,
             parallel_num: 1, // parallel self-play matches for a single open pattern
             mcts_c_puct: 3f32,
             mcts_iterations: 400,
@@ -573,9 +573,9 @@ impl SelfPlayer {
 
             // current move is not placed in board yet
             let noise_percentage = match board.get_stones() {
-                0..=4 => 0.3f32,
-                5..=15 => 0.25f32,
-                _ => 0.20f32,
+                0..=4 => 0.5f32,
+                5..=10 => 0.20f32,
+                _ => 0.10f32,
             };
             let index = Self::choose_with_dirichlet_noice(&vector, noise_percentage);
 

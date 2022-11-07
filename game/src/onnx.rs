@@ -14,6 +14,10 @@ use std::os::raw::{c_char, c_void};
 use std::ptr;
 use std::sync::Once;
 
+use widestring::{u16cstr, U16CString};
+
+
+
 lazy_static! {
     pub static ref API: OnnxApi = unsafe {
         let base = OrtGetApiBase();
@@ -72,7 +76,8 @@ pub struct OnnxApi {
 
     create_session_fn: unsafe extern "C" fn(
         env: *const OrtEnv,
-        model_path: *const ::std::os::raw::c_char,
+        model_path: *const wchar_t,
+        //model_path: *const ::std::os::raw::c_char,
         options: *const OrtSessionOptions,
         out: *mut *mut OrtSession,
     ) -> OrtStatusPtr,
@@ -255,7 +260,8 @@ impl OnnxApi {
     pub fn create_session(self: &Self, model_path: &str, options: &SessionOptions) -> Session {
         let mut ptr: *mut OrtSession = 0 as *mut OrtSession;
         let status_ptr = unsafe {
-            let filepath = CString::new(model_path).expect("CString::new failed");
+            let filepath = U16CString::from_str(model_path).unwrap();
+            //let filepath = CString::new(model_path).expect("CString::new failed");
             (self.create_session_fn)(get_env(), filepath.as_ptr(), options.0, &mut ptr)
         };
         self.verify_status("CreateSession", status_ptr);
@@ -415,13 +421,14 @@ impl SessionOptions {
         unsafe { (API.set_session_graph_optimization_level_fn)(self.0, graph_optimization_level) };
     }
 
+    /*
     pub fn append_execution_provider_core_ml(self: &mut Self, flags: COREMLFlags) {
         let status_ptr = unsafe { OrtSessionOptionsAppendExecutionProvider_CoreML(self.0, flags) };
         API.verify_status(
             "OrtSessionOptionsAppendExecutionProvider_CoreML",
             status_ptr,
         );
-    }
+    } */
 }
 
 #[derive(Debug)]

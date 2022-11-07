@@ -8,6 +8,7 @@ use std::io::prelude::*;
 use tflitec::interpreter::{Interpreter, Options};
 use tflitec::tensor;
 
+
 use crate::game::*;
 use crate::onnx;
 
@@ -235,10 +236,11 @@ impl OnnxModel {
     pub fn load(onnx_model_path: &str) -> Self {
         let mut session_options = onnx::API.create_session_options();
         //session_options.set_intra_op_num_threads(1);
+        /*
         session_options.append_execution_provider_core_ml(
             onnx::COREMLFlags_COREML_FLAG_ONLY_ENABLE_DEVICE_WITH_ANE
                 + onnx::COREMLFlags_COREML_FLAG_ENABLE_ON_SUBGRAPH,
-        );
+        ); */
         session_options
             .set_session_graph_optimization_level(onnx::GraphOptimizationLevel_ORT_ENABLE_ALL);
 
