@@ -60,12 +60,12 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", &lib_dir);
     // Re-runs script if any files in res are changed
     // Tell cargo to invalidate the built crate whenever the wrapper changes
-    println!("cargo:rerun-if-changed=include/wrapper.h");
     println!("cargo:rerun-if-changed=model.py");
     //println!("cargo:rerun-if-changed=best.tflite");
 
     copy_to_output("model.py", &env::var("PROFILE").unwrap()).expect("Could not copy");
-    //copy_to_output("best.tflite", &env::var("PROFILE").unwrap()).expect("Could not copy");
+    copy_to_output("best.tflite", &env::var("PROFILE").unwrap()).expect("Could not copy");
+    copy_to_output("latest.weights", &env::var("PROFILE").unwrap()).expect("Could not copy");
 
     tauri_build::build();
 

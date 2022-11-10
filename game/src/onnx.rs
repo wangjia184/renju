@@ -14,7 +14,7 @@ use std::os::raw::{c_char, c_void};
 use std::ptr;
 use std::sync::Once;
 
-use widestring::{u16cstr, U16CString};
+use widestring::{U16CString};
 
 
 

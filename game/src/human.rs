@@ -1,3 +1,18 @@
+/*
+ * (C) Copyright 2022 Jerry.Wang (https://github.com/wangjia184).
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 use crate::game::{RenjuBoard, SquareMatrix, StateTensor, TerminalState, BOARD_SIZE};
 
 use crate::mcts::MonteCarloTree;
@@ -6,57 +21,59 @@ use crate::model::{OnnxModel, TfLiteModel};
 use crossbeam::atomic::AtomicCell;
 
 use std::sync::atomic::Ordering;
-use tokio::sync::RwLock;
-
-use std::cell::RefCell;
-use std::sync::{atomic::AtomicBool, Arc, Mutex};
-use tokio::task::JoinHandle;
-
+use std::include_bytes;
 use rand::seq::SliceRandom;
+use std::cell::RefCell;
+use std::sync::{atomic::AtomicBool, Arc};
+use tokio::sync::oneshot::{self, Receiver};
+use tokio::task::JoinHandle;
+use tempfile::{tempdir, TempDir};
+use std::fs::File;
+use std::io::prelude::*;
 
-static SINGLETON: Mutex<Option<Arc<RwLock<HumanVsMachineMatch>>>> = Mutex::new(None);
+lazy_static! {
+    static ref SINGLETON_CHANNEL: AtomicCell<Receiver<HumanVsMachineMatch>> = {
+        let instance = HumanVsMachineMatch::new(true);
+        let (tx, rx) = oneshot::channel();
+        if let Err(_) = tx.send(instance) {
+            unreachable!();
+        }
+        AtomicCell::new(rx)
+    };
 
-pub async fn start_new_match(human_play_black: bool) -> BoardInfo {
-    let instance = HumanVsMachineMatch::new(human_play_black).await;
-    *SINGLETON.lock().unwrap() = Some(instance.clone());
-    if !human_play_black {
-        return machine_move().await;
-    }
-    {
-        let lock = instance.read().await;
-        lock.get_board()
-    }
-}
-fn get_match() -> Arc<RwLock<HumanVsMachineMatch>> {
-    if let Some(ref x) = *SINGLETON.lock().unwrap() {
-        return x.clone();
-    }
-    unreachable!()
-}
+    static ref MODEL_FILE : (String, TempDir) = {
+        let dir = tempdir().expect("Unable to create template file");
+        let filename = dir.path().join("model.tflite").display().to_string();
+        println!("{}", &filename);
+    
+        let mut file = File::create(&filename).expect("Unable to create temp file");
 
-pub async fn get_state() -> MatchState {
-    let instance = get_match();
-    let lock = instance.read().await;
-    lock.get_board().get_state()
-}
-
-pub async fn human_move(pos: (usize, usize)) -> BoardInfo {
-    let instance = get_match();
-    HumanVsMachineMatch::human_move(instance.clone(), pos).await;
-    {
-        let lock = instance.read().await;
-        lock.get_board()
-    }
+        let bytes = include_bytes!("../best.tflite");
+        file.write_all(bytes).expect("Unable to save model to file");
+        file.flush().expect("Unable to flush model to file");
+        ( filename, dir )
+    };
 }
 
-pub async fn machine_move() -> BoardInfo {
-    let instance = get_match();
-    HumanVsMachineMatch::machine_move(instance.clone()).await;
-    {
-        let lock = instance.read().await;
-        lock.get_board()
+pub async fn access<Fut, F>(mut f: F) -> MatchState
+where
+    F: FnMut(HumanVsMachineMatch) -> Fut,
+    Fut: std::future::Future<Output = HumanVsMachineMatch>,
+{
+    let (tx, rx) = oneshot::channel();
+    let rx = SINGLETON_CHANNEL.swap(rx);
+    let mut instance = rx.await.unwrap();
+
+    instance = f(instance).await;
+
+    let state = instance.state;
+
+    if let Err(_) = tx.send(instance) {
+        unreachable!()
     }
+    state
 }
+
 #[derive(PartialEq, Debug, Clone, Copy, serde::Serialize)]
 pub enum MatchState {
     HumanThinking,
@@ -90,17 +107,13 @@ impl BoardInfo {
     pub fn get_stones(self: &Self) -> u8 {
         self.stones
     }
-
-    pub fn get_state(self: &Self) -> MatchState {
-        self.state
-    }
 }
 
 impl HumanVsMachineMatch {
-    pub async fn new(human_play_black: bool) -> Arc<RwLock<Self>> {
+    fn new(human_play_black: bool) -> Self {
         let ai_player = AiPlayer::new();
         let max_threads = 1; //(num_cpus::get() - 0).max(1);
-        let instance = Arc::new(RwLock::new(Self {
+        Self {
             ai_player: Arc::new(ai_player),
             board: RenjuBoard::default(),
             human_play_black: human_play_black,
@@ -109,21 +122,26 @@ impl HumanVsMachineMatch {
             } else {
                 MatchState::MachineThinking
             },
-            choices: if human_play_black {
-                Vec::new()
-            } else {
-                vec![(7, 7)]
-            },
+            choices: Vec::new(),
             max_threads: max_threads as u32,
             thinking: Arc::new(AtomicBool::new(!human_play_black)),
             handles: Vec::with_capacity(max_threads),
-        }));
-
-        if !human_play_black {
-            Self::start_thinking(instance.clone()).await;
         }
+    }
 
-        instance
+    pub async fn restart(self: &mut Self, human_play_black: bool) {
+        self.stop_thinking().await;
+        self.ai_player = Arc::new(AiPlayer::new());
+        self.board = RenjuBoard::default();
+        self.human_play_black = human_play_black;
+        if human_play_black {
+            self.state = MatchState::HumanThinking;
+            self.choices = Vec::new();
+        } else {
+            self.state = MatchState::MachineThinking;
+            self.choices = vec![(7, 7)];
+            self.machine_move().await;
+        };
     }
 
     pub fn get_board(self: &Self) -> BoardInfo {
@@ -137,112 +155,99 @@ impl HumanVsMachineMatch {
     }
 
     async fn think(
+        breadth_first: bool,
         board: RenjuBoard,
         choices: Vec<(usize, usize)>,
         thinking: Arc<AtomicBool>,
         ai_player: Arc<AiPlayer>,
     ) {
         while thinking.load(Ordering::SeqCst) {
-            ai_player.think(board.clone(), &choices).await;
+            ai_player
+                .think(breadth_first, board.clone(), &choices)
+                .await;
         }
     }
 
-    async fn start_thinking(this: Arc<RwLock<Self>>) {
-        let thread_num = {
-            let instance = this.read().await;
-            instance.thinking.store(true, Ordering::SeqCst);
-            instance.max_threads
-        };
+    async fn start_thinking(self: &mut Self) {
+        self.thinking.store(true, Ordering::SeqCst);
 
-        for _ in 0..thread_num {
+        for index in 0..self.max_threads {
             let (board, choices, thinking, ai_player) = {
-                let instance = this.read().await;
                 (
-                    instance.board.clone(),
-                    instance.choices.clone(),
-                    instance.thinking.clone(),
-                    instance.ai_player.clone(),
+                    self.board.clone(),
+                    self.choices.clone(),
+                    self.thinking.clone(),
+                    self.ai_player.clone(),
                 )
             };
-            let handle = tokio::spawn(async move {
-                Self::think(board, choices, thinking, ai_player).await;
-            });
-            this.write().await.handles.push(handle);
+
+            self.handles.push(tokio::spawn(async move {
+                Self::think(index > 0, board, choices, thinking, ai_player).await;
+            }));
         }
     }
 
-    async fn stop_thinking(this: Arc<RwLock<Self>>) {
-        {
-            let instance = this.read().await;
-            instance.thinking.store(false, Ordering::SeqCst);
-        }
+    async fn stop_thinking(self: &mut Self) {
+        self.thinking.store(false, Ordering::SeqCst);
 
-        let mut instance = this.write().await;
-
-        while let Some(handle) = instance.handles.pop() {
+        while let Some(handle) = self.handles.pop() {
             _ = handle.await;
         }
     }
 
-    async fn human_move(this: Arc<RwLock<Self>>, pos: (usize, usize)) -> MatchState {
-        Self::stop_thinking(this.clone()).await;
-        let state = {
-            let mut instance = this.write().await;
+    pub async fn human_move(self: &mut Self, pos: (usize, usize)) -> MatchState {
+        self.stop_thinking().await;
 
-            assert_eq!(instance.state, MatchState::HumanThinking);
-            instance
-                .ai_player
-                .notify_opponent_moved(&instance.board, pos)
-                .await;
-            instance.state = match instance.board.do_move(pos) {
+        let state = {
+            assert_eq!(self.state, MatchState::HumanThinking);
+            self.ai_player.notify_opponent_moved(&self.board, pos).await;
+            self.state = match self.board.do_move(pos) {
                 TerminalState::AvailableMoves(choices) => {
-                    instance.choices = choices;
+                    self.choices = choices;
                     MatchState::MachineThinking
                 }
-                TerminalState::BlackWon if instance.human_play_black => MatchState::HumanWon,
-                TerminalState::BlackWon if !instance.human_play_black => MatchState::MachineWon,
-                TerminalState::WhiteWon if instance.human_play_black => MatchState::MachineWon,
-                TerminalState::WhiteWon if !instance.human_play_black => MatchState::HumanWon,
+                TerminalState::BlackWon if self.human_play_black => MatchState::HumanWon,
+                TerminalState::BlackWon if !self.human_play_black => MatchState::MachineWon,
+                TerminalState::WhiteWon if self.human_play_black => MatchState::MachineWon,
+                TerminalState::WhiteWon if !self.human_play_black => MatchState::HumanWon,
                 TerminalState::Draw => MatchState::Draw,
                 _ => unreachable!(),
             };
-            instance.state
+            self.state
         };
 
         if state == MatchState::MachineThinking {
-            Self::start_thinking(this).await;
+            self.start_thinking().await;
         }
         state
     }
 
-    async fn machine_move(this: Arc<RwLock<Self>>) -> MatchState {
-        Self::stop_thinking(this.clone()).await;
-        let state = {
-            let mut instance = this.write().await;
+    pub async fn machine_move(self: &mut Self) -> MatchState {
+        self.stop_thinking().await;
 
-            assert_eq!(instance.state, MatchState::MachineThinking);
-            let pos = instance
+        let state = {
+            assert_eq!(self.state, MatchState::MachineThinking);
+            let pos = self
                 .ai_player
-                .do_next_move(&instance.board, &instance.choices)
+                .do_next_move(&self.board, &self.choices)
                 .await;
-            instance.state = match instance.board.do_move(pos) {
+            self.state = match self.board.do_move(pos) {
                 TerminalState::AvailableMoves(choices) => {
-                    instance.choices = choices;
+                    self.choices = choices;
                     MatchState::HumanThinking
                 }
-                TerminalState::BlackWon if instance.human_play_black => MatchState::HumanWon,
-                TerminalState::BlackWon if !instance.human_play_black => MatchState::MachineWon,
-                TerminalState::WhiteWon if instance.human_play_black => MatchState::MachineWon,
-                TerminalState::WhiteWon if !instance.human_play_black => MatchState::HumanWon,
+                TerminalState::BlackWon if self.human_play_black => MatchState::HumanWon,
+                TerminalState::BlackWon if !self.human_play_black => MatchState::MachineWon,
+                TerminalState::WhiteWon if self.human_play_black => MatchState::MachineWon,
+                TerminalState::WhiteWon if !self.human_play_black => MatchState::HumanWon,
                 TerminalState::Draw => MatchState::Draw,
                 _ => unreachable!(),
             };
-            instance.state
+            self.state
         };
 
         if state == MatchState::HumanThinking {
-            let cloned_insance = this.clone();
-            Self::start_thinking(cloned_insance).await;
+            self.start_thinking().await;
         }
 
         state
@@ -250,15 +255,15 @@ impl HumanVsMachineMatch {
 }
 
 // each thread creates a dedicated model
-// thread_local!(static MODEL: RefCell<Option<OnnxModel>> = RefCell::new(None));
+ thread_local!(static MODEL: RefCell<Option<TfLiteModel>> = RefCell::new(None));
 
-use unsafe_send_sync::UnsafeSendSync;
-
+//use unsafe_send_sync::UnsafeSendSync;
+/*
 lazy_static! {
     pub static ref MODEL: UnsafeSendSync<OnnxModel> =
         UnsafeSendSync::new(OnnxModel::load("model.onnx"));
 }
-
+*/
 pub struct AiPlayer {
     tree: MonteCarloTree,
     // temperature parameter in (0, 1] controls the level of exploration
@@ -279,10 +284,32 @@ impl AiPlayer {
         }
     }
 
-    pub async fn think(self: &Self, board: RenjuBoard, choices: &Vec<(usize, usize)>) {
+    pub async fn think(
+        self: &Self,
+        breadth_first: bool,
+        board: RenjuBoard,
+        choices: &Vec<(usize, usize)>,
+    ) {
         self.tree
-            .rollout(board, choices, |state_tensor: StateTensor| {
-                MODEL.predict_one(state_tensor)
+            .rollout(breadth_first, board, choices, |state_tensor: StateTensor| {
+                MODEL.with(|ref_cell| {
+                    let mut model = ref_cell.borrow_mut();
+                    if model.is_none() {
+                        #[cfg(feature="train")]
+                        let filepath = "best.tflite";
+
+                        #[cfg(not(feature="train"))]
+                        let filepath = &MODEL_FILE.0;
+                        *model = Some(
+                            TfLiteModel::load(filepath).expect("Unable to load model"),
+                        )
+                    }
+                    model
+                        .as_ref()
+                        .unwrap()
+                        .predict_one(state_tensor)
+                        .expect("Unable to predict_one")
+                })
             })
             .await
             .expect("rollout failed")

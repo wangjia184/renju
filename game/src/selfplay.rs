@@ -7,7 +7,6 @@ use rand::prelude::*;
 use rand_distr::Dirichlet;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use std::cell::RefCell;
 use std::fs;
 use std::path::Path;
 use std::sync::RwLock;
@@ -21,8 +20,6 @@ use crate::game::*;
 use crate::mcts::MonteCarloTree;
 use crate::model::{OnnxModel, PolicyValueModel};
 
-// each thread creates a dedicated model
-// thread_local!(static MODEL: RefCell<Option<OnnxModel>> = RefCell::new(None));
 
 use unsafe_send_sync::UnsafeSendSync;
 
@@ -51,12 +48,12 @@ pub struct DataSet {
 impl Trainer {
     pub fn new() -> Self {
         Self {
-            batch_size: 1000,
-            parallel_num: 1, // parallel self-play matches for a single open pattern
+            batch_size: 5000,
+            parallel_num: 20, // parallel self-play matches for a single open pattern
             mcts_c_puct: 3f32,
             mcts_iterations: 400,
-            epochs: 5,
-            learn_rate: 1e-3,
+            epochs: 3,
+            learn_rate: 5e-4,
             lr_multiplier: 3f32,
             kl_targ: 0.02f32,
         }
@@ -574,7 +571,7 @@ impl SelfPlayer {
             // current move is not placed in board yet
             let noise_percentage = match board.get_stones() {
                 0..=4 => 0.5f32,
-                5..=10 => 0.20f32,
+                5..=8 => 0.20f32,
                 _ => 0.10f32,
             };
             let index = Self::choose_with_dirichlet_noice(&vector, noise_percentage);
@@ -600,7 +597,7 @@ impl SelfPlayer {
     ) -> ((usize, usize), SquareMatrix) {
         for _ in 0..iterations {
             self.tree
-                .rollout(board.clone(), choices, |state_tensor: StateTensor| {
+                .rollout(false, board.clone(), choices, |state_tensor: StateTensor| {
                     let lock = MODEL.read().unwrap();
                     let model = lock.as_ref().unwrap();
                     model.predict_one(state_tensor)

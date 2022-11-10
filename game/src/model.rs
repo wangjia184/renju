@@ -1,8 +1,27 @@
+/*
+ * (C) Copyright 2022 Jerry.Wang (https://github.com/wangjia184).
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 use bytes::Bytes;
 use num_cpus;
+#[cfg(feature="train")]
 use pyo3::prelude::*;
+#[cfg(feature="train")]
 use pyo3::types::{PyBytes, PyList, PyTuple};
+#[cfg(feature="train")]
 use std::fs::OpenOptions;
+#[cfg(feature="train")]
 use std::io::prelude::*;
 
 use tflitec::interpreter::{Interpreter, Options};
@@ -12,11 +31,12 @@ use tflitec::tensor;
 use crate::game::*;
 use crate::onnx;
 
+#[cfg(feature="train")]
 pub struct PolicyValueModel {
     module: Py<PyModule>,
 }
 
-//
+#[cfg(feature="train")]
 impl PolicyValueModel {
     pub fn new(filename: &str) -> PyResult<Self> {
         let mut source_code = String::new();
@@ -172,7 +192,7 @@ impl TfLiteModel {
     pub fn load(tflite_model_path: &str) -> Result<Self, tflitec::Error> {
         // Create interpreter options
         let mut options = Options::default();
-        options.thread_count = num_cpus::get() as i32 / 2;
+        options.thread_count = (num_cpus::get() as i32 - 2).max(1);
         options.is_xnnpack_enabled = true;
         println!("is_xnnpack_enabled={}", options.is_xnnpack_enabled);
 

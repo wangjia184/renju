@@ -324,7 +324,7 @@ def save_quantized_model(file_name):
             yield [tf.convert_to_tensor([input_value])]
 
     converter = tf.lite.TFLiteConverter.from_keras_model(renju.model)
-    # converter.optimizations = [tf.lite.Optimize.DEFAULT]
+    converter.optimizations = [tf.lite.Optimize.DEFAULT]
     converter.target_spec.supported_types = [tf.float16]
     
     # https://www.tensorflow.org/lite/performance/post_training_integer_quant
@@ -386,7 +386,7 @@ def convert_to_onnx_model(file_name):
     )
 
 #convert_to_onnx_model("test.onnx")
-
+#save_quantized_model("best.tflite")
 
 """
 from pprint import pprint
