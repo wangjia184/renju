@@ -386,7 +386,7 @@ def convert_to_onnx_model(file_name):
     )
 
 #convert_to_onnx_model("test.onnx")
-#save_quantized_model("best.tflite")
+save_quantized_model("best.tflite")
 
 """
 from pprint import pprint

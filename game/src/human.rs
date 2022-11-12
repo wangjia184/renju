@@ -16,7 +16,7 @@
 use crate::game::{RenjuBoard, SquareMatrix, StateTensor, TerminalState, BOARD_SIZE};
 
 use crate::mcts::MonteCarloTree;
-use crate::model::{OnnxModel, TfLiteModel};
+use crate::model::{TfLiteModel};
 
 use crossbeam::atomic::AtomicCell;
 
@@ -276,7 +276,7 @@ impl AiPlayer {
         self.visit_time_matrix.load()
     }
     pub fn new() -> Self {
-        let tree = MonteCarloTree::new(5f32);
+        let tree = MonteCarloTree::new(3f32);
         Self {
             tree: tree,
             temperature: 1e-3,
