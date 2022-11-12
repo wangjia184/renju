@@ -18,13 +18,27 @@ use std::cmp;
 use std::collections::HashSet;
 
 pub const BOARD_SIZE: usize = 15;
-
+pub const CHANNELS: usize = 4;
 const DISTANCE: usize = 2;
 const NO_STONE: u8 = 0;
 const AVAILABLE: u8 = 1;
 
 pub type SquareMatrix<T = f32> = [[T; BOARD_SIZE]; BOARD_SIZE];
-pub type StateTensor<T = f32> = [SquareMatrix<T>; 4];
+pub type StateTensor<T = f32> = [SquareMatrix<T>; CHANNELS];
+
+pub trait StateTensorExtension {
+    fn shape(self: &Self) -> [i64; 4];
+}
+impl<T> StateTensorExtension for [StateTensor<T>] {
+    fn shape(self: &Self) -> [i64; 4] {
+        return [
+            self.len() as i64,
+            CHANNELS as i64,
+            BOARD_SIZE as i64,
+            BOARD_SIZE as i64,
+        ];
+    }
+}
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Color {

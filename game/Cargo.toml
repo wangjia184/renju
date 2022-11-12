@@ -1,6 +1,6 @@
 [package]
-name = "renju_game"
-version = "0.1.0"
+name = "renju"
+version = "0.2.0"
 edition = "2021"
 authors = ["Jerry.Wang", "vcer@qq.com"]
 homepage = "https://github.com/wangjia184/renju"
@@ -30,8 +30,9 @@ tflitec = { version = "0.5.1", features = ["xnnpack"] }
 rand = "0.8.5"
 rand_distr = "0.4.3"
 probability = "0.18.0"
+unsafe-send-sync = "0.1.0"
 
-pyo3 = { version = "0.17.1", features = [],  optional = true }
+pyo3 = { version = "0.17.3", features = ["auto-initialize"],  optional = true }
 
 [dependencies.uuid]
 version = "1.1.2"
@@ -45,6 +46,8 @@ features = [
 [build-dependencies]
 tauri-build = { version = "1.1.1", features = [] }
 copy_to_output = "2.0.0"
+bindgen = "0.61.0"
+build-target = "0.4.0"
 
 
 
@@ -63,20 +66,35 @@ blas-src = { version = "0.8.0", default-features = false, features = [
 
 [target.'cfg(target_os = "windows")'.dependencies]
 ndarray = { version = "0.15.6" }
+widestring = "1.0.2"
+
+
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.42.0"
+features = [
+    "Win32_System_Console",
+    "Win32_System_Threading",
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+]
+
+[target.'cfg(not(windows))'.dependencies]
+nix = { version = "0.25.0", features = ["signal", "sched"] } # https://docs.rs/nix/0.24.1/nix/index.html#features
+
 
 
 [profile.release]
-strip = true      # Automatically strip symbols from the binary.
-opt-level = "z"   # Optimize for size.
-lto = true
-codegen-units = 1
-
+#strip = true      # Automatically strip symbols from the binary.
+#opt-level = "z"   # Optimize for size.
+#lto = true
+#codegen-units = 1
+debug = true
 
 
 [features]
 # by default Tauri runs in production mode
 # when `tauri dev` runs it is executed with `cargo run --no-default-features` if `devPath` is an URL
-default = ["custom-protocol",  "train"]
+default = ["custom-protocol"]
 # this feature is used used for production builds where `devPath` points to the filesystem
 # DO NOT remove this
 custom-protocol = ["tauri/custom-protocol"]

@@ -13,11 +13,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+#[macro_use]
+extern crate lazy_static;
+
 pub mod game;
 pub mod mcts;
 
+pub mod onnx;
 pub mod model;
-
+pub mod human;
 pub use game::{RenjuBoard, SquareMatrix, SquaredMatrixExtension, StateTensor, TerminalState};
 pub use mcts::{MonteCarloTree, TreeNode};
 #[cfg(feature="train")]

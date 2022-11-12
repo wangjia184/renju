@@ -26,11 +26,8 @@ use clap::{Parser, Subcommand};
 
 use tokio::time::{sleep, Duration};
 
-mod contest;
-mod game;
-mod human;
-mod mcts;
-mod model;
+
+use renju::*;
 #[cfg(feature="train")]
 mod selfplay;
 use human::MatchState;
@@ -44,7 +41,7 @@ Produce matches by self-play
 ";
 
 static TRAIN_HELP_TEXT: &str = "
-Train the model by reinforcement learning
+Train the model by self play
 ";
 
 /// Renju Game
@@ -85,6 +82,7 @@ async fn main() {
             model_file,
             export_dir,
         }) => {
+            set_lowest_process_priority();
             let mut trainer = Trainer::new();
 
             trainer
@@ -149,4 +147,46 @@ async fn do_move(window: tauri::Window, pos: (usize, usize)) -> MatchState {
         m
     })
     .await
+}
+
+
+
+
+#[cfg(target_os = "windows")]
+pub fn set_lowest_process_priority()
+{
+    use windows_sys::Win32::System::Threading::*;
+
+    unsafe {
+        SetPriorityClass(GetCurrentProcess(), IDLE_PRIORITY_CLASS);
+        //SetProcessAffinityMask(GetCurrentProcess(), 1);
+    }
+}
+
+
+
+#[cfg(target_os = "linux")]
+pub fn set_lowest_process_priority()
+{
+    use nix::libc::*;
+    use nix::sched::{CpuSet, sched_setaffinity};
+    use nix::unistd::Pid;
+
+    //let mut cpu_set = CpuSet::new();
+    //let _ = cpu_set.set(0);
+    //let _ = sched_setaffinity(Pid::from_raw(0), &cpu_set);
+
+    unsafe {
+        setpriority(PRIO_PROCESS, 0, 19 /* least scheduling */);
+    }
+    
+}
+
+#[cfg(target_os = "macos")]
+pub fn set_lowest_process_priority()
+{
+    use nix::libc::*;
+    unsafe {
+        setpriority(PRIO_PROCESS, 0, 19 /* least scheduling */);
+    }
 }

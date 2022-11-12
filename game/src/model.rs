@@ -27,7 +27,9 @@ use std::io::prelude::*;
 use tflitec::interpreter::{Interpreter, Options};
 use tflitec::tensor;
 
+
 use crate::game::*;
+use crate::onnx;
 
 #[cfg(feature="train")]
 pub struct PolicyValueModel {
@@ -166,13 +168,13 @@ impl PolicyValueModel {
         })
     }
 
-    pub fn save_quantized_model(self: &Self, file_path: &str) -> PyResult<()> {
+    pub fn convert_to_onnx_model(self: &Self, file_path: &str) -> PyResult<()> {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|py| {
             let save_fn: Py<PyAny> = self
                 .module
                 .as_ref(py)
-                .getattr("save_quantized_model")?
+                .getattr("convert_to_onnx_model")?
                 .into();
 
             let args = PyTuple::new(py, &[file_path]);
@@ -243,5 +245,52 @@ impl TfLiteModel {
         let score = score_data[0];
 
         Ok((prob_matrix, score))
+    }
+}
+
+pub struct OnnxModel {
+    session: onnx::Session,
+}
+
+impl OnnxModel {
+    pub fn load(onnx_model_path: &str) -> Self {
+        let mut session_options = onnx::API.create_session_options();
+        //session_options.set_intra_op_num_threads(1);
+        /*
+        session_options.append_execution_provider_core_ml(
+            onnx::COREMLFlags_COREML_FLAG_ONLY_ENABLE_DEVICE_WITH_ANE
+                + onnx::COREMLFlags_COREML_FLAG_ENABLE_ON_SUBGRAPH,
+        ); */
+        session_options
+            .set_session_graph_optimization_level(onnx::GraphOptimizationLevel_ORT_ENABLE_ALL);
+
+        let session = onnx::API.create_session(onnx_model_path, &session_options);
+        Self { session: session }
+    }
+
+    pub fn predict_one(self: &Self, state_tensor: StateTensor) -> (SquareMatrix<f32>, f32) {
+        let memory_info = onnx::API.create_cpu_memory_info(
+            onnx::OrtAllocatorType_OrtArenaAllocator,
+            onnx::OrtMemType_OrtMemTypeDefault,
+        );
+
+        let mut state_tensor_batch = vec![state_tensor];
+        let shape = state_tensor_batch.shape();
+        let input_tensor = memory_info.create_tensor_with_data::<f32>(
+            bytemuck::cast_slice_mut(&mut state_tensor_batch),
+            &shape,
+        );
+
+        let output_tensors = self.session.run(&input_tensor);
+
+        assert_eq!(output_tensors.len(), 2);
+
+        let mut prob_matrix: SquareMatrix<f32> = SquareMatrix::default();
+        output_tensors[0].copy_to::<f32>(bytemuck::cast_slice_mut(&mut prob_matrix));
+
+        let mut score = [0f32; 1];
+        output_tensors[1].copy_to::<f32>(bytemuck::cast_slice_mut(&mut score));
+
+        (prob_matrix, score[0])
     }
 }

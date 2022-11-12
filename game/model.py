@@ -10,6 +10,10 @@ import numpy as np
 import platform
 import tensorflow as tf
 import tensorflow_probability as tfp
+import tf2onnx
+
+from onnxruntime.quantization import CalibrationDataReader, QuantFormat, QuantType, quantize_static, shape_inference
+
 
 print( "platform: ", platform.platform() )
 print( "tensorflow version:", tf.__version__ )
@@ -36,7 +40,7 @@ def create_model(board_width, board_height):
 
             self.bn1 = tf.keras.layers.BatchNormalization()
 
-            self.relu1 = tf.keras.layers.PReLU()
+            self.relu1 = tf.keras.layers.ReLU()
 
             self.conv2 = tf.keras.layers.Conv2D(filters, 
                 kernel_size=(3, 3), 
@@ -46,7 +50,7 @@ def create_model(board_width, board_height):
                 padding='same')
             self.bn2 = tf.keras.layers.BatchNormalization()
             
-            self.relu = tf.keras.layers.PReLU()
+            self.relu = tf.keras.layers.ReLU()
         def call(self, input):
             shortcut = self.shortcut(input)
 
@@ -78,7 +82,7 @@ def create_model(board_width, board_height):
 
              # 2. Common Networks Layers
             self.conv1 = tf.keras.layers.Conv2D( name="conv1",
-                filters=32,
+                filters=64,
                 kernel_size=(3, 3),
                 padding="same",
                 data_format=data_format,
@@ -86,25 +90,25 @@ def create_model(board_width, board_height):
                 )(self.source)
 
             self.reslayer = tf.keras.Sequential([
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
-                ResBlock(32),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
+                ResBlock(64),
             ], name='resblocks')(self.conv1)
 
             # 3-1 Action Networks
@@ -117,7 +121,7 @@ def create_model(board_width, board_height):
 
             self.action_bn = tf.keras.layers.BatchNormalization(name="action_bn")(self.action_conv)
 
-            self.action_act = tf.keras.layers.PReLU(name="action_activation")(self.action_bn)
+            self.action_act = tf.keras.layers.ReLU(name="action_activation")(self.action_bn)
 
             # flatten tensor
             self.action_conv_flat = tf.keras.layers.Flatten(name="action_flatten")(self.action_act)
@@ -141,7 +145,7 @@ def create_model(board_width, board_height):
 
             self.evaluation_bn = tf.keras.layers.BatchNormalization(name="evaluation_bn")(self.evaluation_conv)
 
-            self.evaluation_act = tf.keras.layers.PReLU(name="evaluation_activation")(self.evaluation_bn)
+            self.evaluation_act = tf.keras.layers.ReLU( name="evaluation_activation")(self.evaluation_bn)
 
             self.evaluation_conv_flat = tf.keras.layers.Flatten(name="evaluation_flatten")(self.evaluation_act)
 
@@ -150,6 +154,8 @@ def create_model(board_width, board_height):
                 activation=tf.keras.activations.elu,
                 kernel_regularizer=tf.keras.regularizers.L2(l2_penalty_beta)
                 )(self.evaluation_conv_flat)
+
+            #self.evaluation_fc1_act = tf.keras.layers.ReLU( name="evaluation_fc1_activation")(self.evaluation_fc1)
 
             self.evaluation_fc2 = tf.keras.layers.Dense( 1, 
                 activation=tf.keras.activations.tanh,
@@ -189,12 +195,12 @@ def create_model(board_width, board_height):
 
     
         @tf.function(input_signature=[
-            tf.TensorSpec([None, 4, board_height, board_width], tf.float32),
+            tf.TensorSpec([1, 4, board_height, board_width], tf.float32),
         ])
-        def predict(self, state_batch):
+        def predict_one(self, state_batch):
             probs, scores = renju.model(state_batch)
             # probs shape=(None, 225); scores shape=(None, 1), [[-0.14458223]]
-            return probs[0], scores[0][0]
+            return probs[0], scores[0]
 
         @tf.function(input_signature=[
             tf.TensorSpec([None, 4, board_height, board_width], tf.float32),
@@ -211,21 +217,7 @@ def create_model(board_width, board_height):
 
 renju = create_model( 15, 15)
 
-def save_model(folder_name):
-    #Saving the model, explictly adding the concrete functions as signatures
-    renju.model.save(folder_name, 
-            save_format='tf', 
-            overwrite=True,
-            include_optimizer=True,
-            signatures={
-                'predict': renju.predict.get_concrete_function(), 
-                'train' : renju.train.get_concrete_function(), 
-                'save' : renju.save.get_concrete_function(),
-                'restore' : renju.restore.get_concrete_function(),
-                'random_choose_with_dirichlet_noice' : renju.random_choose_with_dirichlet_noice.get_concrete_function(),
-                'export_param' : renju.export_param.get_concrete_function(),
-                'import_param' : renju.import_param.get_concrete_function(),
-            })
+
 
 """"""
 def train(state_batch, prob_batch, score_batch, lr):
@@ -316,7 +308,7 @@ def save_model(folder_name):
             overwrite=True,
             include_optimizer=True,
             signatures={
-                'predict': renju.predict.get_concrete_function()
+                'predict_one': renju.predict_one.get_concrete_function()
             })
 
 
@@ -337,6 +329,7 @@ def save_quantized_model(file_name):
     
     # https://www.tensorflow.org/lite/performance/post_training_integer_quant
     # converter.representative_dataset = representative_data_gen
+    # converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
 
     # https://www.tensorflow.org/lite/performance/post_training_integer_quant_16x8
     # converter.target_spec.supported_ops = [tf.lite.OpsSet.EXPERIMENTAL_TFLITE_BUILTINS_ACTIVATIONS_INT16_WEIGHTS_INT8]
@@ -356,34 +349,44 @@ def to_list(x):
             ls[idx] = to_list(sub)
     return ls
 
+try:
+    with open("latest.weights", mode='rb') as file:
+        buffer = file.read()
+        import_parameters(buffer)
+except IOError:
+      print( "Warning: No weights were loaded" )
 
-"""
-with open("latest.weights", mode='rb') as file:
-    buffer = file.read()
-    import_parameters(buffer)
-    obj = {}
-    for layer in renju.model.layers:
-        if layer.name == 'resblocks':
-            child = {}
-            for sublayer in layer.layers:
-                for subsublayer in sublayer.layers:
-                    child[subsublayer.name] = subsublayer.get_weights()
-            obj[layer.name] = child
-        else:
-            obj[layer.name] = layer.get_weights()
-        #if obj[layer.name]:
-        #   layer.set_weights(obj[layer.name])
-    with open('latest.weights', 'wb') as handle:
-        pickle.dump( obj, handle, protocol=pickle.HIGHEST_PROTOCOL)
-"""
+class SampleInputDataReader(CalibrationDataReader):
+    def __init__(self):
+        with open("sample_input.pickle", mode='rb') as file:
+            buffer = file.read()
+            input = pickle.loads(buffer)
+            self.ls = iter(to_list(input['state_tensor_batch']))
 
-with open("latest.weights", mode='rb') as file:
-    buffer = file.read()
-    import_parameters(buffer)
-    obj = pickle.loads(buffer)
+    def get_next(self):
+        data = next( self.ls, None)
+        if data:
+            return { 'input' : [ data ] }
+        return None
 
-#save_quantized_model('best.tflite')
+def convert_to_onnx_model(file_name):
+    spec = (tf.TensorSpec((1, 4, 15, 15), tf.float32, name="input"),)
+    tf2onnx.convert.from_keras( renju.model, input_signature=spec, opset=17, output_path=file_name+".raw")
+    shape_inference.quant_pre_process( input_model_path=file_name+".raw", output_model_path=file_name+".preprocessed")
+    dr = SampleInputDataReader()
+    quantize_static(
+        file_name+".preprocessed",
+        file_name,
+        dr,
+        quant_format=QuantFormat.QDQ,
+        per_channel=False,
+        activation_type=QuantType.QInt8,
+        weight_type=QuantType.QInt8,
+        optimize_model=False,
+    )
 
+#convert_to_onnx_model("test.onnx")
+save_quantized_model("best.tflite")
 
 """
 from pprint import pprint

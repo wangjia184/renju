@@ -16,7 +16,7 @@
 use crate::game::{RenjuBoard, SquareMatrix, StateTensor, TerminalState, BOARD_SIZE};
 
 use crate::mcts::MonteCarloTree;
-use crate::model::TfLiteModel;
+use crate::model::{TfLiteModel};
 
 use crossbeam::atomic::AtomicCell;
 
@@ -42,7 +42,7 @@ lazy_static! {
     };
 
     static ref MODEL_FILE : (String, TempDir) = {
-        let mut dir = tempdir().expect("Unable to create template file");
+        let dir = tempdir().expect("Unable to create template file");
         let filename = dir.path().join("model.tflite").display().to_string();
         println!("{}", &filename);
     
@@ -255,8 +255,15 @@ impl HumanVsMachineMatch {
 }
 
 // each thread creates a dedicated model
-thread_local!(static MODEL: RefCell<Option<TfLiteModel>> = RefCell::new(None));
+ thread_local!(static MODEL: RefCell<Option<TfLiteModel>> = RefCell::new(None));
 
+//use unsafe_send_sync::UnsafeSendSync;
+/*
+lazy_static! {
+    pub static ref MODEL: UnsafeSendSync<OnnxModel> =
+        UnsafeSendSync::new(OnnxModel::load("model.onnx"));
+}
+*/
 pub struct AiPlayer {
     tree: MonteCarloTree,
     // temperature parameter in (0, 1] controls the level of exploration
@@ -269,7 +276,7 @@ impl AiPlayer {
         self.visit_time_matrix.load()
     }
     pub fn new() -> Self {
-        let tree = MonteCarloTree::new(5f32);
+        let tree = MonteCarloTree::new(3f32);
         Self {
             tree: tree,
             temperature: 1e-3,
