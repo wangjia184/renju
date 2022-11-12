@@ -9,7 +9,7 @@ pip3 install tensorflow_probability
 pip3 install git+ssh://git@github.com/onnx/tensorflow-onnx.git
 ```
 
-Mac Arm64 only
+Mac Arm64
 ```
 pip3 install tensorflow-macos
 pip3 install tensorflow-metal
@@ -18,7 +18,7 @@ pip3 install tensorflow-metal
 # Train
 
 ```
-cargo run --release -- train
+cargo run --features train -- train
 ```
 
 
