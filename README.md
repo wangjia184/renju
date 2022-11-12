@@ -20,7 +20,7 @@ Renju is a professional variant of gomoku(five in a row) by adding following res
     * [AlphaGo Zero — a game changer. (How it works?)](https://jonathan-hui.medium.com/alphago-zero-a-game-changer-14ef6e45eba5)
     * Lessons From Alpha Zero [1](https://medium.com/oracledevs/lessons-from-implementing-alphazero-7e36e9054191) [2](https://medium.com/oracledevs/lessons-from-alphazero-connect-four-e4a0ae82af68) [3](https://medium.com/oracledevs/lessons-from-alphazero-part-3-parameter-tweaking-4dceb78ed1e5) [4](https://medium.com/oracledevs/lessons-from-alphazero-part-4-improving-the-training-target-6efba2e71628) [5](https://medium.com/oracledevs/lessons-from-alpha-zero-part-5-performance-optimization-664b38dc509e) [6](https://medium.com/oracledevs/lessons-from-alpha-zero-part-6-hyperparameter-tuning-b1cfcbe4ca9a)
 * The application is developed in Rust language to avoid performance bottleneck in Python for MCTS. 
-* Self-play is much slowe than training. Hence Self-Play is opitimized to use FP16 quantization model with XNNPack. It shows better performance than GPU on Mac M1.
+* Self-play is much slower than training. Hence Self-Play is opitimized to use quantization. It shows better performance than GPU on Mac M1.
 * A novel lock-free tree implementation for MCTS.
 
 ## Neural Network
