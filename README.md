@@ -32,8 +32,8 @@ The following graph shows the policy-value network from AlphaGo Zero.
 It has been simplified here:
 
 1. Number of residual blocks is reduced from 39 to 19.
-2. Residual block width is narrowed from 256 filters down to 32 filters.
-3. Since width is reduced to 1/8 and dying ReLU problem was encountered in first attempt, hence activation function ReLU is replaced with PReLU and ELU.
+2. Residual block width is narrowed from 256 filters down to 64 filters.
+3. Since width is reduced to 1/4 and dying ReLU problem was encountered in first attempt, hence activation function ReLU of last dense layer is replaced with ELU.
 4. Input is simplified to a `(1, 4, 15, 15)` NCHW tensor with four 15x15 planes.
     * The first plane represents stones of current player
     * The second plane represents stones of opponent player
@@ -43,9 +43,7 @@ It has been simplified here:
 
  $$ l = (z-v)^{2}-\pi ^{T}ln(p)+c\left \|\| \theta  \right \|\|^{2} $$
 
-Here comes the model graph
 
-![Model](./model.png)
 
 
 
