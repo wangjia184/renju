@@ -82,7 +82,7 @@ def create_model(board_width, board_height):
 
              # 2. Common Networks Layers
             self.conv1 = tf.keras.layers.Conv2D( name="conv1",
-                filters=64,
+                filters=96,
                 kernel_size=(3, 3),
                 padding="same",
                 data_format=data_format,
@@ -90,25 +90,25 @@ def create_model(board_width, board_height):
                 )(self.source)
 
             self.reslayer = tf.keras.Sequential([
-                ResBlock(64),
-                ResBlock(64),
-                ResBlock(64),
-                ResBlock(64),
-                ResBlock(64),
-                ResBlock(64),
-                ResBlock(64),
-                ResBlock(64),
-                ResBlock(64),
-                ResBlock(64),
-                ResBlock(64),
-                ResBlock(64),
-                ResBlock(64),
-                ResBlock(64),
-                ResBlock(64),
-                ResBlock(64),
-                ResBlock(64),
-                ResBlock(64),
-                ResBlock(64),
+                ResBlock(96),
+                ResBlock(96),
+                ResBlock(96),
+                ResBlock(96),
+                ResBlock(96),
+                ResBlock(96),
+                ResBlock(96),
+                ResBlock(96),
+                ResBlock(96),
+                ResBlock(96),
+                ResBlock(96),
+                ResBlock(96),
+                ResBlock(96),
+                ResBlock(96),
+                ResBlock(96),
+                ResBlock(96),
+                ResBlock(96),
+                ResBlock(96),
+                ResBlock(96),
             ], name='resblocks')(self.conv1)
 
             # 3-1 Action Networks

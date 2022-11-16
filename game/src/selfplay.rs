@@ -48,13 +48,13 @@ pub struct DataSet {
 impl Trainer {
     pub fn new() -> Self {
         Self {
-            batch_size: 5000,
-            parallel_num: 20, // parallel self-play matches for a single open pattern
+            batch_size: 500,
+            parallel_num: 10, // parallel self-play matches for a single open pattern
             mcts_c_puct: 3f32,
-            mcts_iterations: 1000,
+            mcts_iterations: 400,
             epochs: 3,
             learn_rate: 5e-4,
-            lr_multiplier: 1f32,
+            lr_multiplier: 2f32,
             kl_targ: 0.02f32,
         }
     }
