@@ -1,0 +1,1 @@
+https://blog.logrocket.com/integrating-svelte-app-rust-webassembly/#what-wasm
