@@ -7,6 +7,8 @@ pip3 install numpy
 pip3 install tensorflow
 pip3 install tensorflow_probability
 pip3 install git+ssh://git@github.com/onnx/tensorflow-onnx.git
+pip3 install --no-deps tensorflowjs
+pip3 install  tensorflow_decision_forests jax jaxlib
 ```
 
 Mac Arm64
