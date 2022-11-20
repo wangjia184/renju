@@ -9,7 +9,7 @@ import pathlib
 import numpy as np
 import platform
 import tensorflow as tf
-import tensorflowjs as tfjs
+
 import tensorflow_probability as tfp
 import tf2onnx
 
@@ -388,7 +388,10 @@ def convert_to_onnx_model(file_name):
 
 #convert_to_onnx_model("test.onnx")
 #save_quantized_model("best.tflite")
-tfjs.converters.save_keras_model(renju.model, "../web/public/ai/")
+
+#import tensorflowjs as tfjs
+#tfjs.converters.save_keras_model(renju.model, "../web/public/ai/")
+renju.model.save('saved_model')
 
 
 """

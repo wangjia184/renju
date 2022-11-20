@@ -1,3 +1,3 @@
 #!/bin/bash
 
-wasm-pack build renjuai --target web --debug  --out-dir ../web/public/ai
+wasm-pack build renjuai --target web --release  --out-dir ../web/public/ai

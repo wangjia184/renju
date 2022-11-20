@@ -8,18 +8,18 @@ mod game;
 mod mcts;
 mod utils;
 
-use game::{RenjuBoard, SquareMatrix, StateTensor};
+use game::{RenjuBoard, SquareMatrix, StateTensor, BOARD_SIZE};
 use mcts::MonteCarloTree;
 use serde::Deserialize;
-use utils::set_panic_hook;
+use js_sys::Array;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, fs::read_to_string, default};
 
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 extern "C" {
-    fn predict(state_tensor: JsValue) -> JsValue;
+    fn predict(state_tensor: JsValue) -> Prediction;
     fn console_log(text: &str);
 }
 
@@ -39,11 +39,41 @@ pub struct Car {
     pub color: usize, // color in hex code
 }
 
-#[derive(Debug, Deserialize)]
+#[wasm_bindgen]
 pub struct Prediction {
-    pub probability_matrix: SquareMatrix<f32>,
-    pub score: f32, // color in hex code
+    prob_matrix: SquareMatrix<f32>,
+    score: f32, // color in hex code
 }
+
+#[wasm_bindgen]
+impl Prediction {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self {
+            prob_matrix : SquareMatrix::<f32>::default(),
+            score : 0f32,
+        }
+    }
+
+    #[wasm_bindgen(setter)]
+    pub fn set_probabilities(&mut self, probabilities : Array) {
+        assert_eq!( probabilities.length() as usize, BOARD_SIZE * BOARD_SIZE);
+        for row in 0..BOARD_SIZE {
+            for col in 0..BOARD_SIZE {
+                let index = row * BOARD_SIZE + row;
+                self.prob_matrix[row][col] = probabilities.get(index as u32).as_f64().unwrap() as f32;
+            }
+            
+        }
+    }
+
+    #[wasm_bindgen(setter)]
+    pub fn set_score(&mut self, score : f32) {
+        self.score = score;
+    }
+}
+
+
 
 #[wasm_bindgen]
 pub async fn test(input: &str) -> Result<JsValue, JsValue> {
@@ -57,20 +87,10 @@ pub async fn test(input: &str) -> Result<JsValue, JsValue> {
         board,
         &choices,
         |state_tensor| -> (SquareMatrix<f32>, f32) {
-            let return_value = predict(serde_wasm_bindgen::to_value(&state_tensor).unwrap());
-            if return_value.is_object() && !return_value.is_null() && !return_value.is_undefined() {
-                let prediction: Prediction = match serde_wasm_bindgen::from_value(return_value) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        console_log(&format!("{:?}", e));
-                        panic!();
-                    }
-                };
-                console_log(&format!("{:?}", &prediction));
-                return (prediction.probability_matrix, prediction.score);
-            }
-            console_log("predict() does not return valid value");
-            unreachable!()
+            let input = serde_wasm_bindgen::to_value(&state_tensor).unwrap();
+            let prediction = predict(input);
+
+            return (prediction.prob_matrix, prediction.score);
         },
     )
     .await

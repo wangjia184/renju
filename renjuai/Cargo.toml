@@ -14,6 +14,7 @@ default = ["console_error_panic_hook"]
 serde = { version = "1.0.147", features = ["derive"] }
 serde-wasm-bindgen = "0.4.5"
 wee_alloc = "0.4.5"
+js-sys = "0.3.60"
 wasm-bindgen = { version = "0.2.83", features = ["serde-serialize"] }
 bytemuck = "1.12.3"
 wasm-bindgen-futures = "0.4.33"

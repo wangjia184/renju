@@ -1,5 +1,6 @@
 <script>
 	//import wasm from "../../renjuai/Cargo.toml";
+	import Board from './Board.svelte';
 	import { onMount } from "svelte";
 	/*
 	onMount(async () => {
@@ -8,7 +9,11 @@
 		console.log(ret);
 	});
 	*/
-	const myWorker = new Worker("/worker.js");
+	const worker = new Worker("/worker.js");
+	worker.onmessage = (evt) => {
+		const data = evt.data;
+		console.log(`Received message from worker: ${data.type} ${data.message}`)
+	};
 </script>
 
-<main />
+<Board />
