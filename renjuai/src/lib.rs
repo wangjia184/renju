@@ -12,8 +12,6 @@ use game::{RenjuBoard, SquareMatrix, TerminalState, BOARD_SIZE};
 use js_sys::Array;
 use mcts::MonteCarloTree;
 
-use std::collections::HashMap;
-
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -54,30 +52,6 @@ impl Prediction {
     pub fn set_score(&mut self, score: f32) {
         self.score = score;
     }
-}
-
-#[wasm_bindgen]
-pub async fn test(input: &str) -> Result<JsValue, JsValue> {
-    let mut ret: HashMap<String, Vec<i8>> = HashMap::new();
-    ret.insert(input.to_string(), vec![2, 3, 5]);
-
-    let board = RenjuBoard::default();
-    let tree = MonteCarloTree::new(3f32);
-    let choices = vec![(7usize, 7usize)];
-    tree.rollout(
-        board,
-        &choices,
-        |state_tensor| -> (SquareMatrix<f32>, f32) {
-            let input = serde_wasm_bindgen::to_value(&state_tensor).unwrap();
-            let prediction = predict(input);
-
-            return (prediction.prob_matrix, prediction.score);
-        },
-    )
-    .await
-    .expect("Error");
-
-    Ok(serde_wasm_bindgen::to_value(&ret).unwrap())
 }
 
 #[wasm_bindgen]
@@ -139,7 +113,7 @@ impl Brain {
     }
 
     pub fn reset(&mut self, human_play_black: bool) -> JsValue {
-        self.tree = MonteCarloTree::new(3f32);
+        self.tree = MonteCarloTree::new(5f32);
         self.board = RenjuBoard::default();
         self.choices = vec![(7usize, 7usize)];
         self.state = if human_play_black {
@@ -158,6 +132,7 @@ impl Brain {
                 .update_with_position(pos)
                 .await
                 .expect("update_with_position failed");
+            console_log("human_move");
             self.state = match self.board.do_move(pos) {
                 TerminalState::AvailableMoves(choices) => {
                     self.choices = choices;
@@ -199,7 +174,7 @@ impl Brain {
             } else {
                 let move_prob_pairs: Vec<((usize, usize), f32)> = self
                     .tree
-                    .get_move_probability(1e-3)
+                    .get_move_probability(1f32)
                     .await
                     .expect("get_move_probability() failed");
 
@@ -233,6 +208,7 @@ impl Brain {
                 .await
                 .expect("update_with_position() failed");
 
+            console_log("machine_move");
             self.state = match self.board.do_move(pos) {
                 TerminalState::AvailableMoves(choices) => {
                     self.choices = choices;

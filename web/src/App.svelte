@@ -37,8 +37,12 @@
 		if (boardstate && boardstate.state == "HumanThinking") {
 			const pos = evt.detail.pos;
 			boardstate = await humanMove(pos[0], pos[1]);
-
-			setTimeout(async () => (boardstate = await machineMove()), 5000);
+			if (boardstate && boardstate.state == "MachineThinking") {
+				setTimeout(
+					async () => (boardstate = await machineMove()),
+					5000
+				);
+			}
 		}
 	};
 

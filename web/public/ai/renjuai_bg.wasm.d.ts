@@ -5,7 +5,6 @@ export function __wbg_prediction_free(a: number): void;
 export function prediction_new(): number;
 export function prediction_set_probabilities(a: number, b: number): void;
 export function prediction_set_score(a: number, b: number): void;
-export function test(a: number, b: number): number;
 export function __wbg_boardinfo_free(a: number): void;
 export function __wbg_brain_free(a: number): void;
 export function brain_new(): number;

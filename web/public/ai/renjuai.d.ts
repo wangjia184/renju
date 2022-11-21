@@ -1,11 +1,6 @@
 /* tslint:disable */
 /* eslint-disable */
 /**
-* @param {string} input
-* @returns {Promise<any>}
-*/
-export function test(input: string): Promise<any>;
-/**
 */
 export enum MatchState {
   HumanThinking,
@@ -70,7 +65,6 @@ export interface InitOutput {
   readonly prediction_new: () => number;
   readonly prediction_set_probabilities: (a: number, b: number) => void;
   readonly prediction_set_score: (a: number, b: number) => void;
-  readonly test: (a: number, b: number) => number;
   readonly __wbg_boardinfo_free: (a: number) => void;
   readonly __wbg_brain_free: (a: number) => void;
   readonly brain_new: () => number;
