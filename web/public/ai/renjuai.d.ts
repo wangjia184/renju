@@ -1,29 +1,51 @@
 /* tslint:disable */
 /* eslint-disable */
 /**
-* @param {string} s
-* @returns {Car}
-*/
-export function greet(s: string): Car;
-/**
 * @param {string} input
 * @returns {Promise<any>}
 */
 export function test(input: string): Promise<any>;
 /**
-* @param {boolean} human_play_black
 */
-export function start(human_play_black: boolean): void;
+export enum MatchState {
+  HumanThinking,
+  MachineThinking,
+  Draw,
+  HumanWon,
+  MachineWon,
+}
 /**
 */
-export class Car {
+export class BoardInfo {
+  free(): void;
+}
+/**
+*/
+export class Brain {
   free(): void;
 /**
 */
-  color: number;
+  constructor();
 /**
+* @param {boolean} human_play_black
+* @returns {any}
 */
-  number: number;
+  reset(human_play_black: boolean): any;
+/**
+* @param {number} row
+* @param {number} col
+* @returns {Promise<any>}
+*/
+  human_move(row: number, col: number): Promise<any>;
+/**
+* @param {number} iterations
+* @returns {Promise<void>}
+*/
+  think(iterations: number): Promise<void>;
+/**
+* @returns {Promise<any>}
+*/
+  machine_move(): Promise<any>;
 }
 /**
 */
@@ -44,24 +66,25 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
   readonly memory: WebAssembly.Memory;
-  readonly greet: (a: number, b: number) => number;
-  readonly __wbg_car_free: (a: number) => void;
-  readonly __wbg_get_car_number: (a: number) => number;
-  readonly __wbg_set_car_number: (a: number, b: number) => void;
-  readonly __wbg_get_car_color: (a: number) => number;
-  readonly __wbg_set_car_color: (a: number, b: number) => void;
   readonly __wbg_prediction_free: (a: number) => void;
   readonly prediction_new: () => number;
   readonly prediction_set_probabilities: (a: number, b: number) => void;
   readonly prediction_set_score: (a: number, b: number) => void;
   readonly test: (a: number, b: number) => number;
-  readonly start: (a: number) => void;
+  readonly __wbg_boardinfo_free: (a: number) => void;
+  readonly __wbg_brain_free: (a: number) => void;
+  readonly brain_new: () => number;
+  readonly brain_reset: (a: number, b: number) => number;
+  readonly brain_human_move: (a: number, b: number, c: number) => number;
+  readonly brain_think: (a: number, b: number) => number;
+  readonly brain_machine_move: (a: number) => number;
   readonly __wbindgen_malloc: (a: number) => number;
   readonly __wbindgen_realloc: (a: number, b: number, c: number) => number;
   readonly __wbindgen_export_2: WebAssembly.Table;
-  readonly _dyn_core__ops__function__FnMut__A____Output___R_as_wasm_bindgen__closure__WasmClosure___describe__invoke__h5d8269c182510fce: (a: number, b: number, c: number) => void;
+  readonly _dyn_core__ops__function__FnMut__A____Output___R_as_wasm_bindgen__closure__WasmClosure___describe__invoke__hae7b63785a4161f1: (a: number, b: number, c: number) => void;
+  readonly __wbindgen_free: (a: number, b: number) => void;
   readonly __wbindgen_exn_store: (a: number) => void;
-  readonly wasm_bindgen__convert__closures__invoke2_mut__h9742c000f3195eb0: (a: number, b: number, c: number, d: number) => void;
+  readonly wasm_bindgen__convert__closures__invoke2_mut__h757675fbe177217d: (a: number, b: number, c: number, d: number) => void;
 }
 
 export type SyncInitInput = BufferSource | WebAssembly.Module;

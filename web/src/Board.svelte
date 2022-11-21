@@ -1,6 +1,4 @@
 <script>
-
-
     import { Canvas, Layer, t } from "svelte-canvas";
     import { onMount } from "svelte";
 
@@ -12,20 +10,38 @@
 
     export let display = "";
 
+    export let boardstate = null;
+
+    $: boardstate,
+        (() => {
+            if (boardstate) {
+                console.log(boardstate);
+                stoneMatrix = boardstate.matrix;
+                visitMatrix = boardstate.visited;
+                const state = boardstate.state;
+                lastMove = boardstate.last;
+
+                if (
+                    state == "MachineWon" ||
+                    state == "HumanWon" ||
+                    state == "Draw"
+                ) {
+                    dispatch("over", state);
+                }
+            }
+        })();
+
     let container;
     let boardWidth, boardHeight;
     let stoneWidth, stoneHeight;
     let stoneMatrix = [];
     let visitMatrix = [];
-    let blocking = false;
-    let state = "";
+
     let lastMove = null;
     $: stoneWidth = (boardWidth - 2 * MARGIN) / (SIZE - 1);
     $: stoneHeight = (boardHeight - 2 * MARGIN) / (SIZE - 1);
 
-    onMount(async () => {
-        
-    });
+    onMount(async () => {});
 
     $: renderGrid = ({ context, width, height }) => {
         context.beginPath();
@@ -101,16 +117,15 @@
             return;
         }
 
-        if (!blocking && state == "HumanThinking") {
-            blocking = true;
-            invoke("do_move", { pos: [row, col] }).then((state) => {
-                blocking = false;
-            });
-        }
+        dispatch("stone", { pos: [row, col] });
     };
 
     const getStoneImage = (value) => {
-        return value > 0 ? (value % 2 == 0 ? '/assets/white.png' : '/assets/black.png') : "";
+        return value > 0
+            ? value % 2 == 0
+                ? "/assets/white.png"
+                : "/assets/black.png"
+            : "";
     };
 </script>
 

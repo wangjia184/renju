@@ -243,10 +243,10 @@ function logError(f, args) {
         throw e;
     }
 }
-function __wbg_adapter_20(arg0, arg1, arg2) {
+function __wbg_adapter_24(arg0, arg1, arg2) {
     _assertNum(arg0);
     _assertNum(arg1);
-    wasm._dyn_core__ops__function__FnMut__A____Output___R_as_wasm_bindgen__closure__WasmClosure___describe__invoke__h5d8269c182510fce(arg0, arg1, addHeapObject(arg2));
+    wasm._dyn_core__ops__function__FnMut__A____Output___R_as_wasm_bindgen__closure__WasmClosure___describe__invoke__hae7b63785a4161f1(arg0, arg1, addHeapObject(arg2));
 }
 
 function _assertClass(instance, klass) {
@@ -255,17 +255,6 @@ function _assertClass(instance, klass) {
     }
     return instance.ptr;
 }
-/**
-* @param {string} s
-* @returns {Car}
-*/
-export function greet(s) {
-    const ptr0 = passStringToWasm0(s, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.greet(ptr0, len0);
-    return Car.__wrap(ret);
-}
-
 /**
 * @param {string} input
 * @returns {Promise<any>}
@@ -277,14 +266,6 @@ export function test(input) {
     return takeObject(ret);
 }
 
-/**
-* @param {boolean} human_play_black
-*/
-export function start(human_play_black) {
-    _assertBoolean(human_play_black);
-    wasm.start(human_play_black);
-}
-
 function handleError(f, args) {
     try {
         return f.apply(this, args);
@@ -292,22 +273,41 @@ function handleError(f, args) {
         wasm.__wbindgen_exn_store(addHeapObject(e));
     }
 }
-function __wbg_adapter_51(arg0, arg1, arg2, arg3) {
+function __wbg_adapter_60(arg0, arg1, arg2, arg3) {
     _assertNum(arg0);
     _assertNum(arg1);
-    wasm.wasm_bindgen__convert__closures__invoke2_mut__h9742c000f3195eb0(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
+    wasm.wasm_bindgen__convert__closures__invoke2_mut__h757675fbe177217d(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
 }
 
 /**
 */
-export class Car {
+export const MatchState = Object.freeze({ HumanThinking:0,"0":"HumanThinking",MachineThinking:1,"1":"MachineThinking",Draw:2,"2":"Draw",HumanWon:3,"3":"HumanWon",MachineWon:4,"4":"MachineWon", });
+/**
+*/
+export class BoardInfo {
 
     constructor() {
         throw new Error('cannot invoke `new` directly');
     }
 
+    __destroy_into_raw() {
+        const ptr = this.ptr;
+        this.ptr = 0;
+
+        return ptr;
+    }
+
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_boardinfo_free(ptr);
+    }
+}
+/**
+*/
+export class Brain {
+
     static __wrap(ptr) {
-        const obj = Object.create(Car.prototype);
+        const obj = Object.create(Brain.prototype);
         obj.ptr = ptr;
 
         return obj;
@@ -322,43 +322,57 @@ export class Car {
 
     free() {
         const ptr = this.__destroy_into_raw();
-        wasm.__wbg_car_free(ptr);
+        wasm.__wbg_brain_free(ptr);
     }
     /**
-    * @returns {number}
     */
-    get number() {
-        if (this.ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.ptr);
-        const ret = wasm.__wbg_get_car_number(this.ptr);
-        return ret >>> 0;
+    constructor() {
+        const ret = wasm.brain_new();
+        return Brain.__wrap(ret);
     }
     /**
-    * @param {number} arg0
+    * @param {boolean} human_play_black
+    * @returns {any}
     */
-    set number(arg0) {
+    reset(human_play_black) {
         if (this.ptr == 0) throw new Error('Attempt to use a moved value');
         _assertNum(this.ptr);
-        _assertNum(arg0);
-        wasm.__wbg_set_car_number(this.ptr, arg0);
+        _assertBoolean(human_play_black);
+        const ret = wasm.brain_reset(this.ptr, human_play_black);
+        return takeObject(ret);
     }
     /**
-    * @returns {number}
+    * @param {number} row
+    * @param {number} col
+    * @returns {Promise<any>}
     */
-    get color() {
+    human_move(row, col) {
         if (this.ptr == 0) throw new Error('Attempt to use a moved value');
         _assertNum(this.ptr);
-        const ret = wasm.__wbg_get_car_color(this.ptr);
-        return ret >>> 0;
+        _assertNum(row);
+        _assertNum(col);
+        const ret = wasm.brain_human_move(this.ptr, row, col);
+        return takeObject(ret);
     }
     /**
-    * @param {number} arg0
+    * @param {number} iterations
+    * @returns {Promise<void>}
     */
-    set color(arg0) {
+    think(iterations) {
         if (this.ptr == 0) throw new Error('Attempt to use a moved value');
         _assertNum(this.ptr);
-        _assertNum(arg0);
-        wasm.__wbg_set_car_color(this.ptr, arg0);
+        _assertNum(iterations);
+        const ret = wasm.brain_think(this.ptr, iterations);
+        return takeObject(ret);
+    }
+    /**
+    * @returns {Promise<any>}
+    */
+    machine_move() {
+        if (this.ptr == 0) throw new Error('Attempt to use a moved value');
+        _assertNum(this.ptr);
+        const ret = wasm.brain_machine_move(this.ptr);
+        return takeObject(ret);
     }
 }
 /**
@@ -441,6 +455,16 @@ async function load(module, imports) {
 function getImports() {
     const imports = {};
     imports.wbg = {};
+    imports.wbg.__wbg_predict_05321f2a021d4f46 = function() { return logError(function (arg0) {
+        const ret = predict(takeObject(arg0));
+        _assertClass(ret, Prediction);
+        if (ret.ptr === 0) {
+            throw new Error('Attempt to use a moved value');
+        }
+        var ptr0 = ret.ptr;
+        ret.ptr = 0;
+        return ptr0;
+    }, arguments) };
     imports.wbg.__wbindgen_error_new = function(arg0, arg1) {
         const ret = new Error(getStringFromWasm0(arg0, arg1));
         return addHeapObject(ret);
@@ -454,16 +478,6 @@ function getImports() {
         getFloat64Memory0()[arg0 / 8 + 1] = isLikeNone(ret) ? 0 : ret;
         getInt32Memory0()[arg0 / 4 + 0] = !isLikeNone(ret);
     };
-    imports.wbg.__wbg_predict_05321f2a021d4f46 = function() { return logError(function (arg0) {
-        const ret = predict(takeObject(arg0));
-        _assertClass(ret, Prediction);
-        if (ret.ptr === 0) {
-            throw new Error('Attempt to use a moved value');
-        }
-        var ptr0 = ret.ptr;
-        ret.ptr = 0;
-        return ptr0;
-    }, arguments) };
     imports.wbg.__wbindgen_cb_drop = function(arg0) {
         const obj = takeObject(arg0).original;
         if (obj.cnt-- == 1) {
@@ -482,12 +496,38 @@ function getImports() {
         const ret = getStringFromWasm0(arg0, arg1);
         return addHeapObject(ret);
     };
+    imports.wbg.__wbindgen_object_clone_ref = function(arg0) {
+        const ret = getObject(arg0);
+        return addHeapObject(ret);
+    };
+    imports.wbg.__wbindgen_bigint_from_u64 = function(arg0) {
+        const ret = BigInt.asUintN(64, arg0);
+        return addHeapObject(ret);
+    };
     imports.wbg.__wbg_set_20cbc34131e76824 = function() { return logError(function (arg0, arg1, arg2) {
         getObject(arg0)[takeObject(arg1)] = takeObject(arg2);
     }, arguments) };
     imports.wbg.__wbindgen_object_drop_ref = function(arg0) {
         takeObject(arg0);
     };
+    imports.wbg.__wbg_error_f851667af71bcfc6 = function() { return logError(function (arg0, arg1) {
+        try {
+            console.error(getStringFromWasm0(arg0, arg1));
+        } finally {
+            wasm.__wbindgen_free(arg0, arg1);
+        }
+    }, arguments) };
+    imports.wbg.__wbg_new_abda76e883ba8a5f = function() { return logError(function () {
+        const ret = new Error();
+        return addHeapObject(ret);
+    }, arguments) };
+    imports.wbg.__wbg_stack_658279fe44541cf6 = function() { return logError(function (arg0, arg1) {
+        const ret = getObject(arg1).stack;
+        const ptr0 = passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        getInt32Memory0()[arg0 / 4 + 1] = len0;
+        getInt32Memory0()[arg0 / 4 + 0] = ptr0;
+    }, arguments) };
     imports.wbg.__wbg_new_1d9a920c6bfc44a8 = function() { return logError(function () {
         const ret = new Array();
         return addHeapObject(ret);
@@ -527,7 +567,7 @@ function getImports() {
                 const a = state0.a;
                 state0.a = 0;
                 try {
-                    return __wbg_adapter_51(a, state0.b, arg0, arg1);
+                    return __wbg_adapter_60(a, state0.b, arg0, arg1);
                 } finally {
                     state0.a = a;
                 }
@@ -561,8 +601,8 @@ function getImports() {
     imports.wbg.__wbindgen_throw = function(arg0, arg1) {
         throw new Error(getStringFromWasm0(arg0, arg1));
     };
-    imports.wbg.__wbindgen_closure_wrapper1084 = function() { return logError(function (arg0, arg1, arg2) {
-        const ret = makeMutClosure(arg0, arg1, 44, __wbg_adapter_20);
+    imports.wbg.__wbindgen_closure_wrapper1456 = function() { return logError(function (arg0, arg1, arg2) {
+        const ret = makeMutClosure(arg0, arg1, 66, __wbg_adapter_24);
         return addHeapObject(ret);
     }, arguments) };
 
