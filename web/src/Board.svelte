@@ -115,7 +115,6 @@
 </script>
 
 <div
-    style=""
     class="squared_board {display}"
     bind:this={container}
     bind:clientWidth={boardWidth}

@@ -1,0 +1,15 @@
+{
+  "name": "renjuai",
+  "collaborators": [
+    "jerry.wang <vcer@qq.com>"
+  ],
+  "version": "0.1.0",
+  "files": [
+    "renjuai_bg.wasm",
+    "renjuai.js",
+    "renjuai.d.ts"
+  ],
+  "module": "renjuai.js",
+  "types": "renjuai.d.ts",
+  "sideEffects": false
+}
