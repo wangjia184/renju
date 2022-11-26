@@ -1,1 +1,1 @@
-tensorflowjs_converter --input_format tf_saved_model  --output_format=tfjs_graph_model --quantize_float16   .\saved_model ..\web\public\ai
+tensorflowjs_converter --quantize_float16 --input_format tf_saved_model  --output_format=tfjs_graph_model .\saved_model ..\web\public\ai
