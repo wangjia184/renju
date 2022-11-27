@@ -132,7 +132,6 @@ impl Brain {
                 .update_with_position(pos)
                 .await
                 .expect("update_with_position failed");
-            console_log("human_move");
             self.state = match self.board.do_move(pos) {
                 TerminalState::AvailableMoves(choices) => {
                     self.choices = choices;
@@ -208,7 +207,6 @@ impl Brain {
                 .await
                 .expect("update_with_position() failed");
 
-            console_log("machine_move");
             self.state = match self.board.do_move(pos) {
                 TerminalState::AvailableMoves(choices) => {
                     self.choices = choices;

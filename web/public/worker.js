@@ -149,9 +149,11 @@ class RenjuBrain {
     async loop() {
         var cmd = null;
         while ((cmd = commands.shift())) {
-            await cmd.execute(this);
+            this.result = await cmd.execute(this);
         }
-        await this.brain.think(5);
+        if (this.result && this.result.state == 'MachineThinking') {
+            await this.brain.think(50);
+        }
         setTimeout(() => {
             this.loop();
         }, 0);
@@ -182,6 +184,7 @@ class StartGameCommand extends CommandBase {
     async execute(brain/*:RenjuBrain*/) {
         const result = brain.reset(this.kwargs);
         super.reply(result);
+        return result;
     }
 }
 
@@ -195,6 +198,7 @@ class HumanMoveCommand extends CommandBase {
     async execute(brain/*:RenjuBrain*/) {
         const result = await brain.human_move(this.kwargs);
         super.reply(result);
+        return result;
     }
 }
 
@@ -208,5 +212,6 @@ class MachineMoveCommand extends CommandBase {
     async execute(brain/*:RenjuBrain*/) {
         const result = await brain.machine_move(this.kwargs);
         super.reply(result);
+        return result;
     }
 }
