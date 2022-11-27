@@ -30,7 +30,6 @@ pub struct TreeNode {
     children: HashMap<(usize /*row*/, usize /*col*/), Arc<AtomicCell<Receiver<Self>>>>,
     visit_times: u32, // number of visited times
     probability: f32, // prior probability from policy network
-    breadth_first_visit_times: u32,
 
     // UCB is based on the principle of “optimism in the fact of uncertainty”,
     // which basically means if you don’t know which action is best
@@ -103,33 +102,6 @@ impl TreeNodeChildren {
         assert!(selected.is_some());
         Ok(selected.unwrap())
     }
-
-    async fn breadth_first_select(self: &Self, c_puct: f32) -> Result<OpenedTreeNode, Closed> {
-        let mut selected: Option<OpenedTreeNode> = None;
-        let mut min_times = u32::MAX;
-
-        // order is important here. be careful to avoid dead lock
-        for (_, child) in &self.pairs {
-            let child_node = TreeNode::open_node(child).await?;
-
-            let visit_times = child_node.get().breadth_first_visit_times;
-            if visit_times < min_times {
-                min_times = visit_times;
-                selected = Some(child_node);
-
-                if visit_times == u32::MIN {
-                    break;
-                }
-            }
-        }
-        assert!(selected.is_some());
-        selected
-            .as_mut()
-            .unwrap()
-            .get_mut()
-            .breadth_first_visit_times += 1;
-        Ok(selected.unwrap())
-    }
 }
 
 impl TreeNode {
@@ -147,7 +119,6 @@ impl TreeNode {
             visit_times: 0,
             probability: prob,
             q: 0f32,
-            breadth_first_visit_times: 0,
         };
         if let Err(_) = tx.send(child) {
             panic!("tx.send(child) failed");
@@ -177,7 +148,6 @@ impl TreeNode {
             visit_times: 0,
             probability: 0f32,
             q: 0f32,
-            breadth_first_visit_times: 0,
         };
         init(&mut child);
 

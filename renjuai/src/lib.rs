@@ -113,7 +113,7 @@ impl Brain {
     }
 
     pub fn reset(&mut self, human_play_black: bool) -> JsValue {
-        self.tree = MonteCarloTree::new(5f32);
+        self.tree = MonteCarloTree::new(3f32);
         self.board = RenjuBoard::default();
         self.choices = vec![(7usize, 7usize)];
         self.state = if human_play_black {

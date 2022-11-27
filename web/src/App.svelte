@@ -62,7 +62,7 @@
 			if (boardstate && boardstate.state == "MachineThinking") {
 				setTimeout(
 					async () => (boardstate = await machineMove()),
-					15000
+					60000
 				);
 			}
 		}
