@@ -8,14 +8,14 @@
     const MARGIN = 50;
     const SIZE = 15.0;
 
-    export let display = "show_probability";
+    export let display = "show_visit_count";
 
     export let boardstate = null;
 
     $: boardstate,
         (() => {
             if (boardstate) {
-                console.log(boardstate);
+                //console.log(boardstate);
                 stoneMatrix = boardstate.matrix;
                 visitCountMatrix = boardstate.visit_count;
                 probabilityMatrix = boardstate.probability;

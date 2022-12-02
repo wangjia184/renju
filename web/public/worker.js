@@ -162,8 +162,13 @@ class RenjuBrain {
         while ((cmd = commands.shift())) {
             this.result = await cmd.execute(this);
         }
-        if (this.result && this.result.state == 'MachineThinking') {
-            await this.brain.think(50);
+        if (this.result) {
+            if( this.result.state == 'MachineThinking' ) {
+                await this.brain.think(100);
+            } else if ( this.result.state == 'HumanThinking' ) {
+                await this.brain.think(10);
+            } 
+           
         }
         setTimeout(() => {
             this.loop();
