@@ -8,7 +8,7 @@
     const MARGIN = 50;
     const SIZE = 15.0;
 
-    export let display = "";
+    export let display = "show_avg_value";
 
     export let boardstate = null;
 
@@ -17,7 +17,9 @@
             if (boardstate) {
                 console.log(boardstate);
                 stoneMatrix = boardstate.matrix;
-                visitMatrix = boardstate.visited;
+                visitCountMatrix = boardstate.visit_count;
+                probabilityMatrix = boardstate.probability;
+                avgValueMatrix = boardstate.avg_value;
                 const state = boardstate.state;
                 lastMove = boardstate.last;
 
@@ -35,7 +37,9 @@
     let boardWidth, boardHeight;
     let stoneWidth, stoneHeight;
     let stoneMatrix = [];
-    let visitMatrix = [];
+    let visitCountMatrix = [];
+    let probabilityMatrix = [];
+    let avgValueMatrix = [];
 
     let lastMove = null;
     $: stoneWidth = (boardWidth - 2 * MARGIN) / (SIZE - 1);
@@ -159,18 +163,40 @@
                 height:{stoneHeight - 4}px"
             >
                 <span class="stone_number">{value ? value : ""}</span>
-                {#if visitMatrix[row][col] > 0}
-                    <span class="visit_times">
-                        {#if visitMatrix[row][col] > 10000000}
-                            {(visitMatrix[row][col] / 1000000).toFixed(0)} M
-                        {:else if visitMatrix[row][col] > 1000000}
-                            {(visitMatrix[row][col] / 1000000).toFixed(1)} M
-                        {:else if visitMatrix[row][col] > 10000}
-                            {(visitMatrix[row][col] / 1000).toFixed(0)} K
-                        {:else if visitMatrix[row][col] > 1000}
-                            {(visitMatrix[row][col] / 1000).toFixed(1)} K
+
+                {#if visitCountMatrix[row][col] > 0}
+                    <span class="visit_count">
+                        {#if visitCountMatrix[row][col] > 10000000}
+                            {(visitCountMatrix[row][col] / 1000000).toFixed(0)} M
+                        {:else if visitCountMatrix[row][col] > 1000000}
+                            {(visitCountMatrix[row][col] / 1000000).toFixed(1)} M
+                        {:else if visitCountMatrix[row][col] > 10000}
+                            {(visitCountMatrix[row][col] / 1000).toFixed(0)} K
+                        {:else if visitCountMatrix[row][col] > 1000}
+                            {(visitCountMatrix[row][col] / 1000).toFixed(1)} K
                         {:else}
-                            {visitMatrix[row][col]}
+                            {visitCountMatrix[row][col]}
+                        {/if}
+                    </span>
+                {/if}
+
+                {#if probabilityMatrix[row][col] > 0.0001}
+                    <span class="probability">
+                        {#if probabilityMatrix[row][col] > 0.01}
+                            {(probabilityMatrix[row][col] * 100).toFixed(0)}
+                        {:else}
+                            {(probabilityMatrix[row][col] * 100).toFixed(2)}
+                        {/if}
+                        %
+                    </span>
+                {/if}
+
+                {#if Math.abs(avgValueMatrix[row][col]) > 0.1}
+                    <span class="avg_value">
+                        {#if Math.abs(avgValueMatrix[row][col]) > 1}
+                            {avgValueMatrix[row][col].toFixed(0)}
+                        {:else}
+                            {avgValueMatrix[row][col].toFixed(2)}
                         {/if}
                     </span>
                 {/if}
@@ -207,7 +233,7 @@
         cursor: default;
         display: none;
     }
-    .visit_times {
+    .visit_count {
         font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
         font-size: 12px;
         cursor: default;
@@ -216,10 +242,34 @@
             1px -1px 1px black;
         display: none;
     }
+    .probability {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        font-size: 12px;
+        cursor: default;
+        color: #ee6666;
+        text-shadow: 1px 1px 1px black, -1px -1px 1px black, -1px 1px 1px black,
+            1px -1px 1px black;
+        display: none;
+    }
+    .avg_value {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        font-size: 12px;
+        cursor: default;
+        color: yellow;
+        text-shadow: 1px 1px 1px black, -1px -1px 1px black, -1px 1px 1px black,
+            1px -1px 1px black;
+        display: none;
+    }
     :global(.show_number) .stone_number {
         display: inline-block !important;
     }
-    :global(.show_visit_times) .visit_times {
+    :global(.show_visit_count) .visit_count {
+        display: inline-block !important;
+    }
+    :global(.show_probability) .probability {
+        display: inline-block !important;
+    }
+    :global(.show_avg_value) .avg_value {
         display: inline-block !important;
     }
 
@@ -229,7 +279,7 @@
     .white_stone .stone_number {
         color: black;
     }
-    .black_stone .visit_times {
+    .black_stone .visit_count {
         text-shadow: none;
     }
 

@@ -80,7 +80,7 @@ import("https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.1.0/dist/tf.min.js")
             tensors[0].dispose();
             tensors[1].dispose();
 
-            let prediction = new wasm.Prediction();
+            const prediction = new wasm.Prediction();
             prediction.score = score;
             prediction.probabilities = probabilities;
 

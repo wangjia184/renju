@@ -374,15 +374,21 @@ impl MonteCarloTree {
         Ok(())
     }
 
-    pub async fn get_visit_times(self: &Self) -> Result<SquareMatrix<u32>, Closed> {
-        let mut matrix = SquareMatrix::default();
+    pub async fn get_top_view(
+        self: &Self,
+    ) -> Result<(SquareMatrix<u32>, SquareMatrix<f32>, SquareMatrix<f32>), Closed> {
+        let mut visit_count_matrix = SquareMatrix::default();
+        let mut probability_matrix = SquareMatrix::default();
+        let mut q_matrix = SquareMatrix::default();
         // get visit times of direct children of root
         let root = self.root.read().await.clone();
         TreeNode::enumerate_children(&root, |(row, col), child| {
-            matrix[*row][*col] = child.visit_times;
+            visit_count_matrix[*row][*col] = child.visit_times;
+            probability_matrix[*row][*col] = child.probability;
+            q_matrix[*row][*col] = child.q;
         })
         .await?;
-        Ok(matrix)
+        Ok((visit_count_matrix, probability_matrix, q_matrix))
     }
 
     // temperature parameter in (0, 1] controls the level of exploration

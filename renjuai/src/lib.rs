@@ -71,7 +71,9 @@ pub struct BoardInfo {
     stones: u8,
     state: MatchState,
     last: Option<(usize, usize)>,
-    visited: SquareMatrix<u32>,
+    visit_count: SquareMatrix<u32>,
+    probability: SquareMatrix<f32>,
+    avg_value: SquareMatrix<f32>,
 }
 
 #[wasm_bindgen]
@@ -81,7 +83,9 @@ pub struct Brain {
     choices: Vec<(usize, usize)>,
     state: MatchState,
     human_play_black: bool,
-    visit_time_matrix: Option<SquareMatrix<u32>>,
+    visit_count_matrix: Option<SquareMatrix<u32>>,
+    probability_matrix: Option<SquareMatrix<f32>>,
+    avg_value_matrix: Option<SquareMatrix<f32>>,
 }
 
 impl Brain {
@@ -91,7 +95,9 @@ impl Brain {
             stones: self.board.get_stones(),
             state: self.state,
             last: self.board.get_last_move(),
-            visited: self.visit_time_matrix.unwrap_or_default(),
+            visit_count: self.visit_count_matrix.unwrap_or_default(),
+            probability: self.probability_matrix.unwrap_or_default(),
+            avg_value: self.avg_value_matrix.unwrap_or_default(),
         };
         serde_wasm_bindgen::to_value(&info).unwrap()
     }
@@ -108,7 +114,9 @@ impl Brain {
             choices: vec![(7usize, 7usize)],
             state: MatchState::Draw,
             human_play_black: false,
-            visit_time_matrix: None,
+            visit_count_matrix: None,
+            probability_matrix: None,
+            avg_value_matrix: None,
         }
     }
 
@@ -173,7 +181,7 @@ impl Brain {
             } else {
                 let move_prob_pairs: Vec<((usize, usize), f32)> = self
                     .tree
-                    .get_move_probability(1f32)
+                    .get_move_probability(1e-3)
                     .await
                     .expect("get_move_probability() failed");
 
@@ -196,12 +204,14 @@ impl Brain {
                 }
             };
 
-            let visit_time_matrix = self
+            let (visit_count_matrix, probability_matrix, q_matrix) = self
                 .tree
-                .get_visit_times()
+                .get_top_view()
                 .await
                 .expect("get_visit_times() failed");
-            self.visit_time_matrix = Some(visit_time_matrix);
+            self.visit_count_matrix = Some(visit_count_matrix);
+            self.probability_matrix = Some(probability_matrix);
+            self.avg_value_matrix = Some(q_matrix);
             self.tree
                 .update_with_position(pos)
                 .await
