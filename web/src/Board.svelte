@@ -8,7 +8,7 @@
     const MARGIN = 50;
     const SIZE = 15.0;
 
-    export let display = "show_avg_value";
+    export let display = "show_probability";
 
     export let boardstate = null;
 
@@ -191,12 +191,12 @@
                     </span>
                 {/if}
 
-                {#if Math.abs(avgValueMatrix[row][col]) > 0.1}
+                {#if Math.abs(avgValueMatrix[row][col]) > 0.01}
                     <span class="avg_value">
-                        {#if Math.abs(avgValueMatrix[row][col]) > 1}
-                            {avgValueMatrix[row][col].toFixed(0)}
+                        {#if Math.abs(avgValueMatrix[row][col]) > 0.01}
+                            {(avgValueMatrix[row][col] * 100).toFixed(0)}
                         {:else}
-                            {avgValueMatrix[row][col].toFixed(2)}
+                            {(avgValueMatrix[row][col] * 100).toFixed(2)}
                         {/if}
                     </span>
                 {/if}

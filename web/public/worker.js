@@ -74,11 +74,22 @@ import("https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.1.0/dist/tf.min.js")
             const input = tf.tensor([state_tensor]);
 
             const tensors = model.predict(input);
-            const probabilities = tensors[0].arraySync()[0];
-            const score = tensors[1].dataSync();
+
+            let probabilities;
+            let score;
+            if (tensors[0].size == 225) {
+                probabilities = tensors[0].arraySync()[0];
+                score = tensors[1].dataSync()[0];
+            } else {
+                score = tensors[0].dataSync()[0];
+                probabilities = tensors[1].arraySync()[0];
+            }
+
+
             input.dispose();
             tensors[0].dispose();
             tensors[1].dispose();
+
 
             const prediction = new wasm.Prediction();
             prediction.score = score;
